@@ -1,0 +1,26 @@
+# The backup share both servers can reach. The SOURCE writes to it as \\nas01\sqlmig (SMB) or an
+# NFS mount; the TARGET SQL Server pod reads the same export at /var/opt/mssql/mig.
+# Size it for the COMPRESSED full backup + a few days of log backups (100 TB at ~3:1 => ~35 TB).
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: sqlmig-share
+spec:
+  capacity: { storage: 40Ti }
+  accessModes: ["ReadWriteMany"]
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: nas01.corp.example.com
+    path: /exports/sqlmig
+  mountOptions: ["nconnect=16", "rsize=1048576", "wsize=1048576", "hard"]   # many TCP streams per mount
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: sqlmig-share
+  namespace: sqlserver
+spec:
+  accessModes: ["ReadWriteMany"]
+  storageClassName: ""
+  volumeName: sqlmig-share
+  resources: { requests: { storage: 40Ti } }

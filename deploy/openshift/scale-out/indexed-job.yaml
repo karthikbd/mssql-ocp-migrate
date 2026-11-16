@@ -1,0 +1,31 @@
+# Logical copy scaled out across N pods (use when a physical backup/restore is not allowed, e.g.
+# subsets, schema changes or a different collation). Each pod copies the chunks that hash to its
+# index; shard 1 also creates the schema and writes the shared chunk plan.
+# Needs a ReadWriteMany volume for the plan and per-shard state files.
+apiVersion: batch/v1
+kind: Job
+metadata: { name: mssql-migrate-shards, namespace: sqlserver }
+spec:
+  completionMode: Indexed
+  completions: 16
+  parallelism: 16
+  backoffLimitPerIndex: 5
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: shard
+          image: image-registry.openshift-image-registry.svc:5000/sqlserver/mssql-ocp-migrate:0.2.0
+          args: ["migrate", "-c", "/config/migrate.toml", "--shard", "auto/16", "--skip-validation"]
+          resources: { requests: { cpu: "8", memory: 8Gi }, limits: { cpu: "16", memory: 16Gi } }
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: shared, mountPath: /work/data }
+      volumes:
+        - { name: config, configMap: { name: mssql-migrate-config } }
+        - { name: secrets, secret: { secretName: mssql-migrate-creds } }
+        - { name: shared, persistentVolumeClaim: { claimName: mssql-migrate-shared-rwx } }
+# config: [migration] plan_file = "/work/data/plan.json", state_file = "/work/data/state.json",
+#         workers = 8, target_recovery_simple = true
+# afterwards:  mssql-migrate finalize -c /config/migrate.toml --shard-count 16

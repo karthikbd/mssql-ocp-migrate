@@ -1,0 +1,7 @@
+include README.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md CHANGELOG.md .readthedocs.yaml
+recursive-include docs *.md *.py *.css
+recursive-include tests *.py *.sql *.yml
+recursive-include deploy *
+prune docs/_build
+prune docs/reference/_generated
+global-exclude __pycache__ *.pyc

@@ -1,0 +1,36 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mssql-migrate-config
+data:
+  migrate.toml: |
+    report_dir = "/work/data/report"
+
+    [source]
+    host = "sql01.corp.example.com"     # must be reachable from the cluster (egress / firewall)
+    port = 1433
+    database = "SalesDB"
+    user = "migration_reader"
+    password_file = "/secrets/source-password"
+    encrypt = "optional"
+    trust_server_certificate = true
+
+    [target]
+    host = "mssql.sqlserver.svc.cluster.local"   # the SQL Server Service inside OCP
+    port = 1433
+    database = "SalesDB"
+    user = "migration_writer"
+    password_file = "/secrets/target-password"
+    encrypt = "optional"
+    trust_server_certificate = true
+
+    [migration]
+    workers = 8
+    executor = "auto"
+    chunk_rows = 250000
+    if_target_not_empty = "resume"      # safe to re-run the Job after a failure
+    state_file = "/work/data/migration_state.json"
+
+    [validation]
+    mode = "checksum"
+    sample_full_pct = 5

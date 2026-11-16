@@ -1,0 +1,38 @@
+# The PVC keeps the checkpoint + report, so a failed/evicted Job resumes where it stopped.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: mssql-migrate-work
+spec:
+  accessModes: ["ReadWriteOnce"]
+  resources:
+    requests:
+      storage: 1Gi
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: mssql-migrate
+spec:
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+        - name: migrate
+          image: image-registry.openshift-image-registry.svc:5000/sqlserver/mssql-ocp-migrate:0.2.0
+          args: ["migrate", "-c", "/config/migrate.toml"]
+          resources:
+            requests: { cpu: "2", memory: "2Gi" }
+            limits: { cpu: "8", memory: "6Gi" }
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: work, mountPath: /work/data }
+      volumes:
+        - name: config
+          configMap: { name: mssql-migrate-config }
+        - name: secrets
+          secret: { secretName: mssql-migrate-creds }
+        - name: work
+          persistentVolumeClaim: { claimName: mssql-migrate-work }

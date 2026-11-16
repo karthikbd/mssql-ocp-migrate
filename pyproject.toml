@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mssql-ocp-migrate"
+version = "0.2.0"
+description = "Migrate SQL Server databases to SQL Server on OpenShift (or anywhere) with parallel chunked copy, resume and end-to-end validation. Zero dependencies: the TDS driver is bundled."
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE", "src/mssql_ocp_migrate/_vendor/LICENSE-python-tds.txt"]
+authors = [{ name = "Karthikeyan Balasundaram" }]
+keywords = ["sql server", "mssql", "migration", "openshift", "ocp", "data validation", "tds", "bulk copy"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: System Administrators",
+    "Intended Audience :: Developers",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Database",
+]
+# Deliberately empty: nothing is downloaded at install time. pyodbc is used only if already installed.
+dependencies = []
+
+[project.optional-dependencies]
+test = ["pytest>=7"]
+docs = ["sphinx>=7", "pydata-sphinx-theme>=0.15", "myst-parser>=2", "sphinx-copybutton", "sphinx-design"]
+
+[project.urls]
+Homepage = "https://github.com/karthikbd/mssql-ocp-migrate"
+Documentation = "https://mssql-ocp-migrate.readthedocs.io"
+Source = "https://github.com/karthikbd/mssql-ocp-migrate"
+Issues = "https://github.com/karthikbd/mssql-ocp-migrate/issues"
+Changelog = "https://github.com/karthikbd/mssql-ocp-migrate/blob/main/CHANGELOG.md"
+
+[project.scripts]
+mssql-migrate = "mssql_ocp_migrate.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+mssql_ocp_migrate = ["_vendor/LICENSE-python-tds.txt", "py.typed"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+filterwarnings = ["ignore::DeprecationWarning:mssql_ocp_migrate._vendor"]

@@ -1,0 +1,10 @@
+# Offline image: the wheel has zero dependencies, so `pip install --no-index` never touches a network.
+#   python -m pip wheel . -w dist --no-deps          (on a build machine)
+#   podman build -f deploy/openshift/Containerfile -t mssql-ocp-migrate:0.2.0 .
+FROM registry.access.redhat.com/ubi9/python-311:latest
+COPY dist/mssql_ocp_migrate-*.whl /tmp/
+RUN pip install --no-index --no-deps /tmp/mssql_ocp_migrate-*.whl && rm -f /tmp/*.whl
+WORKDIR /work
+USER 1001
+ENTRYPOINT ["mssql-migrate"]
+CMD ["--help"]

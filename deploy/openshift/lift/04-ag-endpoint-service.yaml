@@ -1,0 +1,9 @@
+# Only for Option B (availability-group seeding, Enterprise/Developer): expose the pod's mirroring
+# endpoint so the on-prem primary can stream the database straight into it.
+apiVersion: v1
+kind: Service
+metadata: { name: mssql-hadr, namespace: sqlserver }
+spec:
+  type: LoadBalancer
+  selector: { app: mssql }
+  ports: [{ name: hadr, port: 5022, targetPort: 5022 }]

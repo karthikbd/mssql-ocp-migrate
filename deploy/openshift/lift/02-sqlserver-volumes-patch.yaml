@@ -1,0 +1,32 @@
+# Patch for the target SQL Server StatefulSet: several data volumes so RESTORE writes in parallel
+# (lift.target_data_dirs), a separate log volume, and the backup share. Restore speed on OpenShift is
+# usually limited by per-volume write throughput, so 4-8 data PVs on a fast storage class matter more
+# than anything else for a 100 TB restore.
+spec:
+  template:
+    spec:
+      containers:
+        - name: mssql
+          volumeMounts:
+            - { name: data1, mountPath: /var/opt/mssql/data1 }
+            - { name: data2, mountPath: /var/opt/mssql/data2 }
+            - { name: data3, mountPath: /var/opt/mssql/data3 }
+            - { name: data4, mountPath: /var/opt/mssql/data4 }
+            - { name: log,   mountPath: /var/opt/mssql/log }
+            - { name: mig,   mountPath: /var/opt/mssql/mig }
+          resources:
+            requests: { cpu: "16", memory: 128Gi }     # restore decompression is CPU-bound
+      volumes:
+        - name: mig
+          persistentVolumeClaim: { claimName: sqlmig-share }
+  volumeClaimTemplates:
+    - metadata: { name: data1 }
+      spec: { accessModes: ["ReadWriteOnce"], storageClassName: fast-block, resources: { requests: { storage: 30Ti } } }
+    - metadata: { name: data2 }
+      spec: { accessModes: ["ReadWriteOnce"], storageClassName: fast-block, resources: { requests: { storage: 30Ti } } }
+    - metadata: { name: data3 }
+      spec: { accessModes: ["ReadWriteOnce"], storageClassName: fast-block, resources: { requests: { storage: 30Ti } } }
+    - metadata: { name: data4 }
+      spec: { accessModes: ["ReadWriteOnce"], storageClassName: fast-block, resources: { requests: { storage: 30Ti } } }
+    - metadata: { name: log }
+      spec: { accessModes: ["ReadWriteOnce"], storageClassName: fast-block, resources: { requests: { storage: 2Ti } } }

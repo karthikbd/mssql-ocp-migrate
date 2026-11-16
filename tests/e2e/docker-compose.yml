@@ -1,0 +1,25 @@
+# Two SQL Server 2022 instances for the end-to-end suite (source = "on-prem", target = "OCP").
+#   docker compose -f tests/e2e/docker-compose.yml up -d
+#   MSSQL_E2E=1 pytest tests/e2e -v
+services:
+  source:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
+      MSSQL_PID: Developer
+    user: root                       # so both containers can write the shared backup volume
+    volumes: ["mig:/var/opt/mssql/mig"]
+    ports: ["14331:1433"]
+  target:
+    image: mcr.microsoft.com/mssql/server:2022-latest
+    environment:
+      ACCEPT_EULA: "Y"
+      MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
+      MSSQL_PID: Developer
+      MSSQL_COLLATION: SQL_Latin1_General_CP1_CI_AS
+    user: root
+    volumes: ["mig:/var/opt/mssql/mig"]   # same share, same path: plays the NFS PV in OpenShift
+    ports: ["14332:1433"]
+volumes:
+  mig: {}

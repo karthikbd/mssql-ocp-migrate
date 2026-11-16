@@ -1,0 +1,107 @@
+{#- mssql-ocp-migrate preview theme: PyData-style layout (navbar, section nav, on-this-page),
+    written for this project. Assets: static/site.css, static/site.js only. -#}
+{%- set is_root = pagename == root_doc -%}
+{%- set nav = toctree(maxdepth=1, collapse=False, includehidden=True, titles_only=True) -%}
+{%- set secnav = toctree(maxdepth=4, collapse=True, includehidden=True, titles_only=True) -%}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title|striptags|e }}{% if not is_root %} — {{ project }} {{ release }}{% endif %} documentation</title>
+  <link rel="stylesheet" href="{{ pathto('_static/pygments.css', 1) }}" />
+  <link rel="stylesheet" href="{{ pathto('_static/site.css', 1) }}" />
+  <script>
+    (function () { try { var t = localStorage.getItem("mom-theme"); if (t === "light" || t === "dark") document.documentElement.dataset.theme = t; } catch (e) {} })();
+  </script>
+</head>
+<body data-root="{{ pathto(root_doc) }}" data-static="{{ pathto('_static/', 1) }}" class="{% if is_root %}is-root{% endif %}">
+  <a class="skip-link" href="#main-content">Skip to main content</a>
+
+  <header class="navbar">
+    <div class="navbar-inner">
+      <a class="brand" href="{{ pathto(root_doc) }}">
+        <svg class="brand-mark" viewBox="0 0 32 32" aria-hidden="true"><ellipse cx="16" cy="8" rx="10" ry="4"/><path d="M6 8v16c0 2.2 4.5 4 10 4s10-1.8 10-4V8"/><path d="M6 16c0 2.2 4.5 4 10 4s10-1.8 10-4"/></svg>
+        <span>mssql-ocp-migrate</span>
+      </a>
+      <nav class="navbar-nav" aria-label="Main">{{ nav }}</nav>
+      <div class="navbar-end">
+        <button class="search-button" type="button" id="search-open" aria-label="Search">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+          <span class="search-label">Search</span><kbd>Ctrl</kbd><span class="kbd-plus">+</span><kbd>K</kbd>
+        </button>
+        <span class="version-badge" title="Documentation version">v{{ release }}</span>
+        <button class="icon-button" type="button" id="theme-toggle" aria-label="Switch colour theme">
+          <svg class="i-sun" viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="4.5"/><path d="M12 2v2.5M12 19.5V22M2 12h2.5M19.5 12H22M4.9 4.9l1.8 1.8M17.3 17.3l1.8 1.8M4.9 19.1l1.8-1.8M17.3 6.7l1.8-1.8"/></svg>
+          <svg class="i-moon" viewBox="0 0 24 24" aria-hidden="true"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>
+        </button>
+        <a class="icon-button" href="https://pypi.org/project/mssql-ocp-migrate/" aria-label="PyPI">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 7l9-4 9 4-9 4z"/><path d="M3 7v10l9 4 9-4V7"/><path d="M12 11v10"/></svg>
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <div class="page{% if is_root %} page-root{% endif %}">
+    {%- if not is_root %}
+    <aside class="sidebar-primary" aria-label="Section navigation">
+      <details class="sidebar-details" open>
+        <summary>Section Navigation</summary>
+        <div class="section-nav">{{ secnav }}</div>
+      </details>
+    </aside>
+    {%- endif %}
+
+    <main id="main-content" class="content">
+      {%- if not is_root %}
+      <nav class="breadcrumbs" aria-label="Breadcrumb">
+        <a href="{{ pathto(root_doc) }}" class="crumb-home" aria-label="Home"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 11l9-7 9 7"/><path d="M5 10v10h14V10"/></svg></a>
+        {%- for p in parents %}<span class="crumb-sep">›</span><a href="{{ p.link|e }}">{{ p.title }}</a>{% endfor %}
+        <span class="crumb-sep">›</span><span class="crumb-current">{{ title|striptags|e }}</span>
+      </nav>
+      {%- endif %}
+      <article class="bd-article">
+        {{ body }}
+      </article>
+
+      <footer class="prev-next">
+        {%- if prev %}
+        <a class="prev-next-link prev" href="{{ prev.link|e }}"><span class="pn-label">‹ previous</span><span class="pn-title">{{ prev.title }}</span></a>
+        {%- else %}<span></span>{%- endif %}
+        {%- if next %}
+        <a class="prev-next-link next" href="{{ next.link|e }}"><span class="pn-label">next ›</span><span class="pn-title">{{ next.title }}</span></a>
+        {%- endif %}
+      </footer>
+    </main>
+
+    {%- if not is_root and display_toc %}
+    <aside class="sidebar-secondary" aria-label="On this page">
+      <div class="page-toc">
+        <p class="toc-heading"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h16M4 12h10M4 18h13"/></svg>On this page</p>
+        {{ toc }}
+      </div>
+    </aside>
+    {%- endif %}
+  </div>
+
+  <footer class="site-footer">
+    <div class="footer-inner">
+      <p>© {{ copyright }}.</p>
+      <p>Created using Sphinx {{ sphinx_version }}.</p>
+    </div>
+  </footer>
+
+  <div class="search-dialog" id="search-dialog" hidden>
+    <div class="search-panel" role="dialog" aria-modal="true" aria-labelledby="search-title">
+      <label id="search-title" for="search-input" class="visually-hidden">Search the docs</label>
+      <div class="search-field">
+        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="M20 20l-4-4"/></svg>
+        <input id="search-input" type="search" placeholder="Search the docs …" autocomplete="off" />
+        <kbd>Esc</kbd>
+      </div>
+      <ol class="search-results" id="search-results"></ol>
+    </div>
+  </div>
+  <script src="{{ pathto('_static/site.js', 1) }}"></script>
+</body>
+</html>

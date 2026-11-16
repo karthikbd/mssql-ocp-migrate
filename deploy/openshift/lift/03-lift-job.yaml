@@ -1,0 +1,34 @@
+# Seeds every database (full backup -> restore NORECOVERY), then keeps them caught up with log
+# backups for up to 7 days. Safe to delete/re-create: progress lives in /work/data/lift_state.json.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata: { name: mssql-migrate-work, namespace: sqlserver }
+spec: { accessModes: ["ReadWriteOnce"], resources: { requests: { storage: 1Gi } } }
+---
+apiVersion: batch/v1
+kind: Job
+metadata: { name: mssql-lift, namespace: sqlserver }
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: lift
+          image: image-registry.openshift-image-registry.svc:5000/sqlserver/mssql-ocp-migrate:0.2.0
+          args: ["lift", "run", "-c", "/config/migrate.toml", "--follow-hours", "168"]
+          resources: { requests: { cpu: 100m, memory: 256Mi } }   # it only sends T-SQL; servers do the work
+          volumeMounts:
+            - { name: config, mountPath: /config }
+            - { name: secrets, mountPath: /secrets, readOnly: true }
+            - { name: work, mountPath: /work/data }
+      volumes:
+        - { name: config, configMap: { name: mssql-migrate-config } }
+        - { name: secrets, secret: { secretName: mssql-migrate-creds } }
+        - { name: work, persistentVolumeClaim: { claimName: mssql-migrate-work } }
+---
+# Cut-over (run in the maintenance window, after stopping the lift Job):
+#   oc delete job mssql-lift
+#   oc run mssql-cutover --rm -it --restart=Never --image=<same image> -- \
+#      lift cutover -c /config/migrate.toml --confirm        (mount config/secrets/work as above)
+#   then: lift verify -c /config/migrate.toml
