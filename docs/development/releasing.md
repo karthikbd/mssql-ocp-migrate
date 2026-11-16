@@ -2,7 +2,7 @@
 
 ## Automated (recommended)
 
-`.github/workflows/python-publish.yml` runs on a published GitHub release or a `v*` tag. It runs the
+`.github/workflows/python-publish.yml` runs when a GitHub release is published (or by hand from the Actions tab). It runs the
 tests, builds the sdist and wheel, checks the wheel declares no runtime dependencies, and publishes
 with **PyPI Trusted Publishing** (OIDC) from the GitHub environment `release`, so no API token is
 stored anywhere.

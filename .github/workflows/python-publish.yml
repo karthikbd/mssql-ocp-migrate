@@ -1,11 +1,10 @@
 name: Publish mssql-ocp-migrate to PyPI
 
+# Publish by creating a GitHub release (vX.Y.Z). One trigger only, so a release never uploads twice.
 on:
   release:
     types: [published]
-  push:
-    tags:
-      - 'v*'
+  workflow_dispatch:
 
 # Minimal default — jobs opt in to only what they need.
 permissions: read-all
