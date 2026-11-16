@@ -8,8 +8,6 @@ updates:
     groups:
       github-actions:
         patterns: ["*"]
-    labels:
-      - "dependencies"
 
   # Hash-locked CI tooling under ci/ (the package itself has no runtime dependencies)
   - package-ecosystem: "pip"
@@ -19,5 +17,3 @@ updates:
     groups:
       ci-tooling:
         patterns: ["*"]
-    labels:
-      - "dependencies"
