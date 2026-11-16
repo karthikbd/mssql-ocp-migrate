@@ -18,7 +18,7 @@ Microsoft ODBC driver are already installed, it can use them; they are never req
 
 ```
 pip install mssql-ocp-migrate                       # from PyPI
-pip install --no-index mssql_ocp_migrate-0.2.0-py3-none-any.whl   # air-gapped: one file, nothing else
+pip install --no-index --find-links ./wheels mssql-ocp-migrate   # air-gapped: the one wheel copied into ./wheels
 ```
 
 ## Pick the path by size

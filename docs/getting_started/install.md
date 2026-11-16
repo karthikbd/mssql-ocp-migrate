@@ -81,10 +81,20 @@ $ pip download --no-deps mssql-ocp-migrate=={{ version }} -d dl
 $ python -m pip install sigstore
 $ python -m sigstore verify github dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl \
     --bundle mssql_ocp_migrate-{{ version }}-py3-none-any.whl.sigstore.json \
-    --repository karthikbd/mssql-ocp-migrate
+    --cert-identity https://github.com/karthikbd/mssql-ocp-migrate/.github/workflows/python-publish.yml@refs/tags/v{{ version }} \
+    --repository karthikbd/mssql-ocp-migrate --ref refs/tags/v{{ version }} --trigger release
+OK: dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl
 ```
 
-(The `.sigstore.json` bundle is attached to the GitHub release.)
+The `.sigstore.json` bundles for the wheel, the sdist and the SBOM are attached to the GitHub
+release. Behind a proxy that blocks Sigstore's update server (`tuf-repo-cdn.sigstore.dev`), add
+`--offline`: the check then uses the trust root shipped inside the `sigstore` package and still
+verifies the signature, the certificate chain and the transparency-log inclusion proof in the
+bundle.
+
+The same check runs on GitHub after every release (`verify-release.yml`): it downloads the release
+files, verifies each signature against the publish workflow and the tag, and confirms PyPI serves
+byte-identical files.
 
 ## Offline and air-gapped installs
 

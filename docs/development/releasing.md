@@ -25,6 +25,11 @@ $ git push origin main
 $ gh release create v{{ version }} --title v{{ version }} --notes-file CHANGELOG.md
 ```
 
+When the publish run succeeds, `verify-release.yml` downloads the release assets on a fresh runner,
+verifies each Sigstore signature against `python-publish.yml`, the tag and the `release` trigger,
+and checks that PyPI serves byte-identical files. A red run there means the release must not be
+trusted. Re-run it for any tag from the Actions tab (*Run workflow*, tag `v{{ version }}`).
+
 `tests.yml` (Python 3.10–3.13 plus a warnings-as-errors docs build), `codeql.yml` and
 `scorecard.yml` run on every push to `main`. Every action is pinned to a commit SHA, and Dependabot
 keeps the pins current.

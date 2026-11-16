@@ -2,6 +2,17 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
+## [Unreleased]
+
+### Security
+- New `verify-release.yml`: after every publish, verifies the Sigstore signature of each release asset (wheel, sdist, SBOM) against `python-publish.yml`, the tag and the `release` trigger, and confirms PyPI serves byte-identical files
+- Read the Docs installs the same hash-locked docs tooling as CI
+- Docs tooling locked for Python 3.12, the docs build version (Sphinx 9.1+ no longer supports 3.10/3.11)
+
+### Docs
+- Signature check now pins the certificate identity, ref and trigger; `--offline` note for proxies that block Sigstore's update server
+- README air-gapped install line no longer names a specific version
+
 ## [0.2.1] - 2026-11-16
 
 ### Security
