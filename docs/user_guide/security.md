@@ -40,11 +40,26 @@ password hash** (`CREATE LOGIN ... WITH PASSWORD = 0x... HASHED, SID = 0x...`), 
 by `sp_help_revlogin` and dbatools `Copy-DbaLogin`. No clear-text password is ever read or
 written. Windows logins aren't copied.
 
-## Supply chain
+## Supply chain and vulnerability management
 
-- The package has **no runtime dependencies**. A test fails the build if any module imports an
-  HTTP client, `pip`, `subprocess` or any non-standard-library module other than the optional
-  drivers.
+| Control | How |
+|---|---|
+| No runtime dependencies | `pip install` brings one package. A test fails the build if any module imports an HTTP client, `pip`, `subprocess` or a non-standard-library module other than the optional drivers, and the release job refuses a wheel with `Requires-Dist` lines |
+| Bundled code is declared | python-tds 1.17.1 is listed in `THIRD_PARTY_NOTICES.md` and in the CycloneDX SBOM attached to each GitHub release, so JFrog Xray, Dependency-Track and similar tools can see it |
+| Known-vulnerability audit | `vulnerability-audit.yml` runs `pip-audit` (OSV and PyPA advisory databases) on the bundled driver and every CI tool set, on every push and pull request and weekly |
+| Static analysis | CodeQL on every push, pull request and weekly |
+| OpenSSF Scorecard | on every push to `main` and weekly; results in the GitHub Security tab |
+| Pinned build | every GitHub Action pinned to a commit SHA; every CI `pip install` hash-locked (`ci/requirements-*.txt`, `--require-hashes`); the package installed with `--no-deps` |
+| Dependency updates | Dependabot, grouped weekly PRs for actions and CI tooling |
+| Publishing | PyPI Trusted Publishing (OIDC, no stored token) from the protected `release` environment; PyPI provenance attestations |
+| Signed releases | Sigstore signatures for the wheel, sdist and SBOM attached to each GitHub release |
+| Least privilege | workflows default to `read-all`; only the publish and signing jobs get `id-token: write` / `contents: write` |
+
+At release 0.2.1, `pip-audit` reports **no known vulnerabilities** for python-tds 1.17.1 or for any
+CI tool, and OSV has no advisories for python-tds, pymssql 2.4.6 or pyodbc 5.2.0.
+
+Other notes:
+
 - The bundled driver is python-tds 1.17.1 (MIT). Its imports were rewritten to a private
   namespace, so it never clashes with an installed `pytds`, and its TLS layer was rewritten on the
   standard library. See `THIRD_PARTY_NOTICES.md`.

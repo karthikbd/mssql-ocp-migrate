@@ -1,0 +1,3 @@
+# Third-party code vendored inside the package (invisible to scanners that read installed metadata).
+# Audited on every CI run with pip-audit against the OSV/PyPA advisory databases.
+python-tds==1.17.1

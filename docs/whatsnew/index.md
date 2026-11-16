@@ -1,5 +1,16 @@
 # Release notes
 
+## 0.2.1 (November 2026)
+
+Supply-chain hardening, no functional changes:
+
+- every CI `pip install` is hash-locked, and the package is installed with `--no-deps`;
+- a weekly and per-change `pip-audit` of the bundled python-tds and all CI tooling;
+- Sigstore-signed wheel, sdist and CycloneDX SBOM on each GitHub release (the SBOM declares the
+  bundled driver for JFrog Xray / Curation);
+- Dependabot updates grouped;
+- installation docs for Windows and JFrog Artifactory / Curation.
+
 ## 0.2.0 (November 2026)
 
 **Physical migration for very large databases.** New `mssql-migrate lift` commands (`plan`, `run`,

@@ -2,6 +2,18 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
+## [0.2.1] - 2026-11-16
+
+### Security
+- Every CI `pip install` hash-locked (`ci/requirements-*.txt`, `--require-hashes`); package installed with `--no-deps`
+- New `vulnerability-audit.yml`: `pip-audit` of the vendored python-tds and all CI tooling on every change and weekly
+- Releases: Sigstore-signed wheel, sdist and a CycloneDX SBOM (declaring the vendored driver) attached to the GitHub release
+- Dependabot updates grouped (paired actions such as CodeQL init/analyze now move together)
+
+### Added
+- Installation docs for Windows and corporate networks (JFrog Artifactory / Curation), signature verification
+- Supply-chain and vulnerability-management section in the security docs; `setup.py` shim; `.codacy/cli.sh`
+
 ## [0.2.0] - 2026-11-16
 
 First public release.

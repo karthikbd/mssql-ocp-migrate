@@ -43,5 +43,13 @@ package only sends the T-SQL.
   moved over the connection, never to disk.
 - Backup files written by `lift` are compressed, not encrypted: protect the share.
 
+## Supply chain
+
+- Every CI `pip install` is hash-locked (`ci/requirements-*.txt`); every GitHub Action is pinned to a commit SHA.
+- `vulnerability-audit.yml`: `pip-audit` of the vendored python-tds and all CI tooling, weekly and on every change.
+- CodeQL and OpenSSF Scorecard on every push to `main` and weekly; Dependabot for actions and CI tooling.
+- Releases: PyPI Trusted Publishing with provenance attestations; Sigstore-signed wheel, sdist and a
+  CycloneDX SBOM (declaring the vendored driver) attached to each GitHub release.
+
 See the [Security page](https://mssql-ocp-migrate.readthedocs.io/en/latest/user_guide/security.html)
 of the documentation for permissions and TLS settings.

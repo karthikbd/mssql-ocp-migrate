@@ -74,6 +74,14 @@ prints a cluster-less availability group (`CLUSTER_TYPE = NONE`, `SEEDING_MODE =
 flag 9567 to compress the seeding stream) that streams the database straight into the OpenShift pod
 and keeps it synchronized. Cut-over is a manual failover.
 
+## Security and supply chain
+
+No runtime dependencies. Releases are published with PyPI Trusted Publishing and carry provenance
+attestations, plus Sigstore-signed assets and a CycloneDX SBOM on GitHub. CI is hash-locked, runs a
+weekly `pip-audit`, CodeQL and OpenSSF Scorecard. See [SECURITY.md](SECURITY.md).
+Corporate networks: see the JFrog Artifactory / Curation notes in the
+[installation guide](https://mssql-ocp-migrate.readthedocs.io/en/latest/getting_started/install.html).
+
 ## Quick start
 
 ```bash

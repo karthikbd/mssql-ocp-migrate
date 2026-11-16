@@ -19,6 +19,73 @@ mssql-migrate {{ version }}
 
 This installs the `mssql-migrate` command and the `mssql_ocp_migrate` Python package.
 
+## Windows (PowerShell)
+
+```powershell
+# 1. A virtual environment
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+# 2. Install
+python -m pip install --upgrade pip
+pip install mssql-ocp-migrate
+
+# 3. Check
+mssql-migrate --version
+```
+
+If `Activate.ps1` is blocked, run `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned` once, or use
+`.\.venv\Scripts\activate.bat` from `cmd`.
+
+## Linux / macOS
+
+```bash
+python3 -m venv .venv && source .venv/bin/activate
+pip install mssql-ocp-migrate
+mssql-migrate --version
+```
+
+## Inside a corporate network (JFrog Artifactory / Curation)
+
+If pip goes through Artifactory, point it at your PyPI remote repository:
+
+```powershell
+pip install --index-url https://<artifactory-host>/artifactory/api/pypi/<pypi-remote>/simple mssql-ocp-migrate
+```
+
+or once, for all installs:
+
+```powershell
+pip config set global.index-url https://<artifactory-host>/artifactory/api/pypi/<pypi-remote>/simple
+```
+
+JFrog Curation evaluates new packages before allowing them. mssql-ocp-migrate is easy to approve:
+
+- **One package, nothing else.** It has no runtime dependencies, so Curation evaluates exactly
+  one package.
+- **MIT-licensed**, published from GitHub with **PyPI Trusted Publishing**. Every file on PyPI has a
+  **provenance attestation** linking it to the GitHub workflow run that built it.
+- **Signed releases.** GitHub release assets are signed with **Sigstore** and come with a
+  **CycloneDX SBOM**. The SBOM declares the bundled third-party code (python-tds 1.17.1, MIT), which
+  scanners that read package metadata would otherwise not see.
+- **Continuous checks:** OpenSSF Scorecard, CodeQL, and a weekly `pip-audit` of the bundled driver
+  and all build tooling.
+
+A very new version can be held by a "package age" policy for some days. That's a policy wait, not
+a problem with the package.
+
+To check a downloaded file's signature against the GitHub workflow that produced it:
+
+```console
+$ pip download --no-deps mssql-ocp-migrate=={{ version }} -d dl
+$ python -m pip install sigstore
+$ python -m sigstore verify github dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl \
+    --bundle mssql_ocp_migrate-{{ version }}-py3-none-any.whl.sigstore.json \
+    --repository karthikbd/mssql-ocp-migrate
+```
+
+(The `.sigstore.json` bundle is attached to the GitHub release.)
+
 ## Offline and air-gapped installs
 
 The package has no dependencies, so a single wheel file is a complete installation. Copy it into the

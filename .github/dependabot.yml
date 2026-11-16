@@ -1,17 +1,23 @@
 version: 2
 updates:
-  # Keep GitHub Actions up to date
+  # Keep GitHub Actions up to date (grouped, so paired actions such as codeql init/analyze move together)
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
       interval: "weekly"
+    groups:
+      github-actions:
+        patterns: ["*"]
     labels:
       - "dependencies"
 
-  # Build/test/docs tooling (the package itself has no runtime dependencies)
+  # Hash-locked CI tooling under ci/ (the package itself has no runtime dependencies)
   - package-ecosystem: "pip"
-    directory: "/"
+    directory: "/ci"
     schedule:
       interval: "weekly"
+    groups:
+      ci-tooling:
+        patterns: ["*"]
     labels:
       - "dependencies"

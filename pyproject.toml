@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mssql-ocp-migrate"
-version = "0.2.0"
+version = "0.2.1"
 description = "Migrate SQL Server databases to SQL Server on OpenShift (or anywhere) with parallel chunked copy, resume and end-to-end validation. Zero dependencies: the TDS driver is bundled."
 readme = "README.md"
 requires-python = ">=3.10"
