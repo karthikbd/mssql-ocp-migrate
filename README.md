@@ -42,6 +42,8 @@ mssql-migrate lift verify  -c migrate.toml          # row counts for every table
    thread per file) to a share both servers can reach. The tool sizes `MAXTRANSFERSIZE` and
    `BUFFERCOUNT` to fit a memory cap. The restore runs `WITH NORECOVERY`, spreading the data files
    over several OpenShift volumes so writes run in parallel, and verifies page checksums as it goes.
+   (If no full backup has ever started the database's log chain, the seed is a regular full backup
+   instead of `COPY_ONLY`, because log backups would otherwise fail.)
 2. **Catch-up:** log backups every `log_interval_seconds`, restored continuously. Log backups taken
    by your *existing* backup jobs are read from `msdb` and applied too (paths translated with
    `path_map`), so the chain never breaks. A missing log, a backup sent to `NUL`, or a third-party
@@ -195,8 +197,12 @@ inside the database.
 ```bash
 pip install -e . pytest && pytest            # unit + engine (SQLite) + TLS wire tests
 docker compose -f tests/e2e/docker-compose.yml up -d
-MSSQL_E2E=1 pytest tests/e2e -v               # real SQL Server 2022 source -> target
+MSSQL_E2E=1 pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v   # real SQL Server 2022
 ```
+
+CI runs the same end-to-end suite on every push against two SQL Server 2022 containers
+(`.github/workflows/e2e.yml`): a full logical migration of every object kind with validation, and
+a physical lift through seed, log catch-up, cut-over and verify.
 
 Releasing: bump the version in `pyproject.toml` and `src/mssql_ocp_migrate/__init__.py`, update
 `CHANGELOG.md`, push `main`, then publish a GitHub release `vX.Y.Z`. `.github/workflows/python-publish.yml`
