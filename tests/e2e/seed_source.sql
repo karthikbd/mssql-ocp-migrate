@@ -49,11 +49,11 @@ CREATE INDEX IX_Order_Customer ON sales.[Order](CustomerId, OrderDate DESC) INCL
 CREATE INDEX IX_Order_Open ON sales.[Order](Status) WHERE Status < 3;
 CREATE TABLE sales.OrderLine (
     OrderId   bigint NOT NULL,
-    LineNo    int NOT NULL,
+    [LineNo]    int NOT NULL,
     Sku       nvarchar(40) NOT NULL,
     Qty       int NOT NULL,
     Price     numeric(12, 2) NOT NULL,
-    CONSTRAINT PK_OrderLine PRIMARY KEY (OrderId, LineNo),
+    CONSTRAINT PK_OrderLine PRIMARY KEY (OrderId, [LineNo]),
     CONSTRAINT FK_OrderLine_Order FOREIGN KEY (OrderId) REFERENCES sales.[Order](OrderId) ON DELETE CASCADE
 );
 CREATE TABLE dbo.Place (Id int NOT NULL PRIMARY KEY, Loc geography NULL, Node hierarchyid NULL);
@@ -102,7 +102,7 @@ FROM n JOIN cu ON cu.rn = n.i % cu.cnt;
 GO
 DELETE FROM sales.[Order] WHERE OrderId BETWEEN 1000 AND 1999;    -- gap
 GO
-INSERT sales.OrderLine (OrderId, LineNo, Sku, Qty, Price)
+INSERT sales.OrderLine (OrderId, [LineNo], Sku, Qty, Price)
 SELECT o.OrderId, l.n, CONCAT(N'SKU-', (o.OrderId * l.n) % 9973), l.n, CAST((o.OrderId % 500) AS numeric(12,2)) / 3
 FROM sales.[Order] o CROSS JOIN (VALUES (1), (2), (3)) l(n)
 WHERE o.OrderId % 4 <> 0 AND o.OrderId <= 300000;
@@ -143,7 +143,7 @@ GO
 -- 0.3.0: storage options, statistics, extended properties, security, database settings ------
 CREATE INDEX IX_Order_Date ON sales.[Order](OrderDate)
     WITH (FILLFACTOR = 80, PAD_INDEX = ON, DATA_COMPRESSION = PAGE, ALLOW_PAGE_LOCKS = OFF);
-CREATE UNIQUE INDEX IX_OrderLine_Sku ON sales.OrderLine(OrderId, LineNo, Sku) WITH (IGNORE_DUP_KEY = ON);
+CREATE UNIQUE INDEX IX_OrderLine_Sku ON sales.OrderLine(OrderId, [LineNo], Sku) WITH (IGNORE_DUP_KEY = ON);
 ALTER INDEX PK_Customer ON sales.Customer REBUILD WITH (DATA_COMPRESSION = ROW, FILLFACTOR = 90);
 ALTER TABLE dbo.EventLog REBUILD WITH (DATA_COMPRESSION = ROW);            -- compressed heap
 CREATE STATISTICS st_Order_Rate ON sales.[Order](Rate, Ratio) WHERE Rate IS NOT NULL WITH NORECOMPUTE;

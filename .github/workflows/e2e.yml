@@ -44,7 +44,7 @@ jobs:
       - name: Run the end-to-end suite
         env:
           MSSQL_E2E: "1"
-        run: python -m pytest tests/e2e -v --tb=short -s
+        run: python -m pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v --tb=short -s
       - name: Server logs on failure
         if: failure()
         run: docker compose -f tests/e2e/docker-compose.yml logs --tail 200

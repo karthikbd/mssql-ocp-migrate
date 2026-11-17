@@ -296,12 +296,12 @@ def test_login_job_and_linked_server(migrated):
 
 def test_validation_detects_tampering(migrated):
     cfg, _, _, tgt = migrated
-    tgt.execute("UPDATE sales.OrderLine SET Qty = Qty + 1 WHERE OrderId = 5 AND LineNo = 2")
+    tgt.execute("UPDATE sales.OrderLine SET Qty = Qty + 1 WHERE OrderId = 5 AND [LineNo] = 2")
     try:
         from mssql_ocp_migrate.cli import main
         assert main(["validate", "-c", _write_cfg(cfg)]) == 1
     finally:
-        tgt.execute("UPDATE sales.OrderLine SET Qty = Qty - 1 WHERE OrderId = 5 AND LineNo = 2")
+        tgt.execute("UPDATE sales.OrderLine SET Qty = Qty - 1 WHERE OrderId = 5 AND [LineNo] = 2")
 
 
 def _write_cfg(cfg) -> str:
