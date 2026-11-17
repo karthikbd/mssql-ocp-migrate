@@ -281,7 +281,7 @@ GRANT SELECT ON sales.Customer TO signer;
 GO
 CREATE TRIGGER ddl_noop ON DATABASE FOR CREATE_PROCEDURE AS SET NOCOUNT ON;
 GO
-EXEC sys.sp_create_plan_guide @name = N'pg_marker', @stmt = N'SELECT 1 AS planguide_marker', @type = N'SQL',
+EXEC sys.sp_create_plan_guide @name = N'pg_marker', @stmt = N'SELECT COUNT(*) FROM sales.Customer WHERE IsActive = 1', @type = N'SQL',
      @module_or_batch = NULL, @params = NULL, @hints = N'OPTION (MAXDOP 1)';
 GO
 IF SUSER_ID('e2e_app') IS NULL CREATE LOGIN e2e_app WITH PASSWORD = 'E2e!AppLogin1', CHECK_POLICY = OFF;
