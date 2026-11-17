@@ -215,6 +215,11 @@ class Table:
 
     @property
     def insert_columns(self) -> List[Column]:
+        """Columns the load writes. With a column set, bulk insert exposes the column set (xml)
+        instead of the sparse columns, so the column set carries their values."""
+        if any(c.is_column_set for c in self.columns):
+            return [c for c in self.columns
+                    if c.is_column_set or (c.insertable and not c.is_sparse)]
         return [c for c in self.columns if c.insertable]
 
     @property

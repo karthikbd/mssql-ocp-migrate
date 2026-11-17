@@ -32,8 +32,10 @@ CASES = [
     (Column("a", "nchar", max_length=20), "漢字", "NCHAR(10)"),
     (Column("a", "nvarchar", max_length=400), "ü€😀", "NVARCHAR(200)"),
     (Column("a", "nvarchar", max_length=-1), "ü" * 50_000, "NVARCHAR(MAX)"),
-    # binary(n) travels as varbinary(n): the bundled driver cannot bulk-write BINARY metadata
-    (Column("a", "binary", max_length=4), b"\x00\x01\x02\x03", "VARBINARY(4)"),
+    # binary(n) is declared BINARY(n) and written by our own BINARY serializer (see below)
+    (Column("a", "binary", max_length=4), b"\x00\x01\x02\x03", "BINARY(4)"),
+    # hierarchyid is capped at 892 bytes: (max) metadata is rejected as an invalid length
+    (Column("a", "hierarchyid", max_length=892), b"\x58", "VARBINARY(892)"),
     (Column("a", "varbinary", max_length=16), b"\xff" * 16, "VARBINARY(16)"),
     (Column("a", "varbinary", max_length=-1), b"\x01" * 200_000, "VARBINARY(MAX)"),
     (Column("a", "uniqueidentifier"), uuid.uuid4(), "UNIQUEIDENTIFIER"),
@@ -79,7 +81,8 @@ def test_type_declares_and_serializes(col, value, decl):
     typ = pytds_type(col)
     assert typ.get_declaration().upper().replace(" ", "") == decl
     factory = tds_types.SerializerFactory(tds_base.TDS74)
-    ser = factory.serializer_by_type(sql_type=typ, collation=raw_collation)
+    meta = SqlServer._bulk_metadata(None, "t", None, [col])[0]
+    ser = meta.choose_serializer(type_factory=factory, collation=raw_collation)
     sink = _Sink()
     w = _TdsWriter(sink, 4096, _Session())
     w.begin_packet(tds_base.PacketType.BULK)
@@ -88,6 +91,22 @@ def test_type_declares_and_serializes(col, value, decl):
     ser.write(w, None)
     w.flush()
     assert len(sink.data) > 8
+
+
+def test_binary_metadata_is_binary_not_varbinary():
+    meta = SqlServer._bulk_metadata(None, "t", None, [Column("h", "binary", max_length=16, nullable=False)])[0]
+    ser = meta.choose_serializer(type_factory=tds_types.SerializerFactory(tds_base.TDS74), collation=raw_collation)
+    assert ser.type == tds_base.XSYBBINARY == 0xAD and ser.size == 16 and meta.flags == 0
+
+
+def test_column_set_replaces_sparse_columns_in_the_load():
+    from mssql_ocp_migrate.model import Table
+    t = Table("dbo", "C", columns=[Column("Id", "int"), Column("Fax", "varchar", 20, is_sparse=True),
+                                   Column("All", "xml", -1, is_column_set=True), Column("Rv", "timestamp")])
+    assert [c.name for c in t.insert_columns] == ["Id", "All"]
+    assert [c.name for c in t.compare_columns] == ["Id", "Fax"]
+    plain = Table("dbo", "P", columns=[Column("Id", "int"), Column("Fax", "varchar", 20, is_sparse=True)])
+    assert [c.name for c in plain.insert_columns] == ["Id", "Fax"]
 
 
 def test_unknown_type_is_rejected():

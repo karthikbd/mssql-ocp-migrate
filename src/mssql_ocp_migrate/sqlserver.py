@@ -247,8 +247,14 @@ class SqlServer(CatalogMixin, Database):
     def _bulk_metadata(self, target_name: str, table: Optional[Table], cols: Sequence[Column]):
         """Column metadata for INSERT BULK, built from catalog metadata (no extra round trip)."""
         from ._vendor.pytds import tds_base
-        return [tds_base.Column(name=c.name, type=pytds_type(c),
-                                flags=tds_base.Column.fNullable if c.nullable else 0) for c in cols]
+        out = []
+        for c in cols:
+            flags = tds_base.Column.fNullable if c.nullable else 0
+            if c.type_name.lower() == "binary" and not c.encrypted:
+                out.append(_BinaryColumn(c.max_length, name=c.name, flags=flags))
+            else:
+                out.append(tds_base.Column(name=c.name, type=pytds_type(c), flags=flags))
+        return out
 
     def _insert_bulk_pytds(self, target_name: str, table: Optional[Table], cols: Sequence[Column],
                            batches: Iterable[Sequence[tuple]], tablock: bool) -> int:
@@ -351,6 +357,7 @@ class SqlServer(CatalogMixin, Database):
         unsafe = (any(c.nullable and c.default_definition for c in cols)
                   or any(c.is_clr or c.type_name.lower() in ("xml", "sql_variant", "datetimeoffset")
                          for c in cols)
+                  or any(c.is_column_set for c in table.columns)        # bcp ordinals skip sparse columns
                   or table.fqn in _PYMSSQL_NO_BULK or (identity and strategy == ID_ROW_INSERT))
         if unsafe:
             return self._load_rows_pytds(table, cols, batches, identity)
@@ -417,8 +424,8 @@ def pytds_type(c: Column):
     t = c.type_name.lower()
     if c.encrypted:                 # ciphertext travels as varbinary (ALLOW_ENCRYPTED_VALUE_MODIFICATIONS)
         return T.VarBinaryMaxType() if c.max_length == -1 else T.VarBinaryType(size=8000)
-    if c.is_clr:
-        return T.VarBinaryMaxType()
+    if c.is_clr:            # hierarchyid and size-capped CLR types must not be sent as (max)
+        return T.VarBinaryType(size=c.max_length) if 0 < c.max_length <= 8000 else T.VarBinaryMaxType()
     if (t in ("datetime2", "datetimeoffset", "time") and c.scale > 6) or t == "datetime":
         return T.NVarCharType(size=40)          # travels as ISO text, see select_exprs()
     simple = {"bit": T.BitType, "tinyint": T.TinyIntType, "smallint": T.SmallIntType, "int": T.IntType,
@@ -434,8 +441,8 @@ def pytds_type(c: Column):
         return T.DecimalType(precision=c.precision, scale=c.scale)
     if t == "char":
         return T.CharType(size=c.max_length)
-    if t == "binary":      # python-tds has no BINARY bulk serializer; server converts varbinary(n)
-        return T.VarBinaryType(size=c.max_length)
+    if t == "binary":      # INSERT BULK uses _BinaryColumn; this type is for the declaration only
+        return T.BinaryType(size=c.max_length)
     if t == "nchar":
         return T.NCharType(size=c.max_length // 2)
     if t == "varchar":
@@ -451,6 +458,31 @@ def pytds_type(c: Column):
     if t == "datetimeoffset":
         return T.DateTimeOffsetType(precision=c.scale)
     raise ValueError(f"unsupported column type {c.type_name} ({c.name})")
+
+
+def _binary_serializer_class():
+    from ._vendor.pytds import tds_base, tds_types
+
+    class BinarySerializer(tds_types.VarBinarySerializer):
+        """BINARY(n) for INSERT BULK: the bundled driver only ships a VARBINARY serializer,
+        and SQL Server rejects VARBINARY metadata for a BINARY column ("Invalid column type")."""
+        type = tds_base.XSYBBINARY
+
+        def __repr__(self):
+            return f"Binary({self.size})"
+
+    return BinarySerializer
+
+
+def _BinaryColumn(size: int, **kw):
+    from ._vendor.pytds import tds_base, tds_types
+    ser = _binary_serializer_class()
+
+    class BinaryColumn(tds_base.Column):
+        def choose_serializer(self, type_factory, collation):
+            return ser(size)
+
+    return BinaryColumn(type=tds_types.BinaryType(size=size), **kw)
 
 
 _PYMSSQL_NO_BULK: set = set()

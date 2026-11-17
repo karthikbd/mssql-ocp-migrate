@@ -1041,11 +1041,12 @@ class CatalogMixin:
                                     WHEN 5 THEN (SELECT a.name FROM sys.assemblies a WHERE a.assembly_id = p.major_id)
                                     WHEN 25 THEN (SELECT c.name FROM sys.certificates c WHERE c.certificate_id = p.major_id)
                                     WHEN 10 THEN xc.name
-                                    WHEN 15 THEN (SELECT m.name FROM sys.service_message_types m
+                                    WHEN 15 THEN (SELECT m.name COLLATE DATABASE_DEFAULT FROM sys.service_message_types m
                                                   WHERE m.message_type_id = p.major_id)
-                                    WHEN 16 THEN (SELECT c.name FROM sys.service_contracts c
+                                    WHEN 16 THEN (SELECT c.name COLLATE DATABASE_DEFAULT FROM sys.service_contracts c
                                                   WHERE c.service_contract_id = p.major_id)
-                                    WHEN 17 THEN (SELECT s.name FROM sys.services s WHERE s.service_id = p.major_id) END,
+                                    WHEN 17 THEN (SELECT s.name COLLATE DATABASE_DEFAULT FROM sys.services s
+                                                  WHERE s.service_id = p.major_id) END,
                        CASE WHEN p.class = 1 AND p.minor_id > 0 THEN COL_NAME(p.major_id, p.minor_id) END
                 FROM sys.database_permissions p
                 JOIN sys.database_principals g ON g.principal_id = p.grantee_principal_id
