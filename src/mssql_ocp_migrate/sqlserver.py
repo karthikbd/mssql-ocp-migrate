@@ -640,7 +640,8 @@ def _BinaryColumn(size: int, **kw):
 _PYMSSQL_NO_BULK: set = set()
 _PYTDS_NO_BULK: set = set()
 _BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size", "Bulk load data was expected but not sent")
-_LEGACY_LOB = ("text", "ntext", "image")
+_LEGACY_LOB = ("text", "ntext", "image",
+               "json", "vector")      # SQL Server 2025 types: bulk metadata for them isn't settled; INSERT converts
 
 
 def _pymssql_coercers(cols: Sequence[Column]):
