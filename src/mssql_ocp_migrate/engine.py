@@ -908,10 +908,15 @@ class Migrator:
             return
         kind = self.cfg.resolved_executor()
         self.progress(f"copying {total} chunks with {m.workers} {kind} workers")
-        Executor = cf.ProcessPoolExecutor if kind == "process" else cf.ThreadPoolExecutor
+        if kind == "process":
+            # spawn, not fork: forking a process that already runs threads can deadlock the child
+            import multiprocessing
+            pool = cf.ProcessPoolExecutor(max_workers=m.workers, mp_context=multiprocessing.get_context("spawn"))
+        else:
+            pool = cf.ThreadPoolExecutor(max_workers=m.workers)
         t0, done_rows, done = time.perf_counter(), 0, 0
         by_id = {c.id: (t, c) for t, c, _ in jobs}
-        with Executor(max_workers=m.workers) as ex:
+        with pool as ex:
             futs = [ex.submit(copy_chunk, self.factory, t, c, m.batch_rows,
                               m.tablock and single, single, m.max_retries)
                     for t, c, single in jobs]

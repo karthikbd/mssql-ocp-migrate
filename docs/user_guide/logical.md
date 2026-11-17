@@ -254,12 +254,17 @@ start a new log chain; the report reminds you.
 from mssql_ocp_migrate import Config, Migrator
 from mssql_ocp_migrate import report
 
-cfg = Config.load("migrate.toml")
-run = Migrator(cfg, progress=print).migrate()
-paths = report.write(cfg, run=run)
-if not run.ok:
-    raise SystemExit(f"migration failed, see {paths['html']}")
+if __name__ == "__main__":          # required: worker processes re-import this module
+    cfg = Config.load("migrate.toml")
+    run = Migrator(cfg, progress=print).migrate()
+    paths = report.write(cfg, run=run)
+    if not run.ok:
+        raise SystemExit(f"migration failed, see {paths['html']}")
 ```
+
+Worker processes are started with `spawn` (never `fork`, which can deadlock a process that
+already runs threads), so a script must keep its top-level code under
+`if __name__ == "__main__":`. In a notebook, set `executor = "thread"`.
 
 `Migrator(factory=...)` accepts any object implementing {class}`mssql_ocp_migrate.adapter.Database`.
 That's how the test suite runs the whole engine on SQLite.

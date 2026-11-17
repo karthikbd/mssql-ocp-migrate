@@ -25,6 +25,15 @@ All notable changes to `mssql-ocp-migrate` are documented here.
 - End-to-end suite runs in CI against two SQL Server 2022 containers (`e2e.yml`)
 
 ### Fixed
+Found by the new end-to-end suite running against real SQL Server 2022 (it now runs in CI on every push):
+- `varbinary(max)` values are written to `INSERT BULK` with an unknown PLP length; the known length the bundled driver wrote could corrupt the row stream (rows rejected with "invalid column length" in later columns)
+- `binary(n)` columns get `BINARY` bulk metadata, and `char`/`nchar` are declared as `(n)varchar` to match the metadata sent; both were rejected as "Invalid column type"
+- `xml` (typed or not) and column sets are bulk-loaded as `nvarchar(max)`; tables with a column set load the column set instead of its sparse columns
+- `hierarchyid` travels as its path text, and tables with `hierarchyid` or size-capped CLR types load with `INSERT`
+- Byte-string parameters are sent as binary with the bundled driver (they were sent as text)
+- If `INSERT BULK` rejects a column, the error names it and the table falls back to `INSERT` on retry; chunks that needed a retry are listed in the run's warnings
+- Worker processes are started with `spawn` instead of `fork` (forking a multi-threaded process can deadlock); scripts using the Python API need an `if __name__ == "__main__":` guard
+- `lift seed` takes a regular full backup when no backup has started the log chain yet (a `COPY_ONLY` one would make every log backup fail)
 - Unique constraints on memory-optimized tables no longer generate `NONCLUSTERED` twice
 - Identity reseed failures on memory-optimized tables are warnings (DBCC CHECKIDENT doesn't support them)
 

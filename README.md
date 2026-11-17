@@ -97,8 +97,10 @@ Python API:
 
 ```python
 from mssql_ocp_migrate import Config, Migrator
-run = Migrator(Config.load("migrate.toml")).migrate()
-print(run.ok, run.rows, run.validation.summary())
+
+if __name__ == "__main__":      # worker processes re-import this script
+    run = Migrator(Config.load("migrate.toml")).migrate()
+    print(run.ok, run.rows, run.validation.summary())
 ```
 
 Each run writes `migration_report/report.html` (evidence for sign-off) and `report.json`.

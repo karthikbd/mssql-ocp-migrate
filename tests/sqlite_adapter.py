@@ -133,7 +133,8 @@ class SqliteDB(Database):
         self.conn.close()
 
 
-# Fault injection shared across threads (and inherited by forked worker processes)
+# Fault injection shared across threads (tests that inject faults use thread workers;
+# process workers are spawned and don't share this dict)
 FAULTS: dict = {}
 _lock = threading.Lock()
 

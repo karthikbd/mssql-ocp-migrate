@@ -117,7 +117,7 @@ def test_failed_chunk_is_reported_then_resume_finishes_only_the_rest(tmp_path):
     src, tgt = make_dbs(tmp_path)
     FAULTS.clear()
     FAULTS[("orders", 2103)] = 5                   # chunk starting at id 2103 fails
-    c = cfg(tmp_path)
+    c = cfg(tmp_path, executor="thread")       # injected faults live in this process's memory
     run = Migrator(c, SqliteFactory(src, tgt, faulty=True)).migrate(validate=False)
     assert not run.ok
     assert run.tables["main.orders"].failed_chunks == ["main.orders#1"]
@@ -127,7 +127,7 @@ def test_failed_chunk_is_reported_then_resume_finishes_only_the_rest(tmp_path):
     assert done_before == 7
 
     FAULTS.clear()
-    c2 = cfg(tmp_path, if_target_not_empty="resume")
+    c2 = cfg(tmp_path, if_target_not_empty="resume", executor="thread")
     progress = []
     run2 = Migrator(c2, SqliteFactory(src, tgt, faulty=True), progress.append).migrate()
     assert run2.ok
@@ -141,7 +141,7 @@ def test_retry_recovers_from_transient_failure(tmp_path, monkeypatch):
     src, tgt = make_dbs(tmp_path)
     FAULTS.clear()
     FAULTS[("orders", 2103)] = 2                   # fails twice, then works
-    run = Migrator(cfg(tmp_path, max_retries=3), SqliteFactory(src, tgt, faulty=True)).migrate()
+    run = Migrator(cfg(tmp_path, max_retries=3, executor="thread"), SqliteFactory(src, tgt, faulty=True)).migrate()
     assert run.ok
     assert rows(src, "orders") == rows(tgt, "orders")
 
