@@ -304,7 +304,7 @@ def test_broker_certificates_signatures_ddl_triggers_and_plan_guides(migrated):
 def test_change_tracking_cdc_and_scoped_configuration(migrated):
     for q in ["SELECT retention_period, retention_period_units_desc, is_auto_cleanup_on "
               "FROM sys.change_tracking_databases WHERE database_id = DB_ID()",
-              "SELECT OBJECT_NAME(object_id), is_track_columns_updated_on FROM sys.change_tracking_tables",
+              "SELECT OBJECT_NAME(object_id), is_track_columns_updated_on FROM sys.change_tracking_tables ORDER BY 1",
               "SELECT CAST(value AS int) FROM sys.database_scoped_configurations WHERE name = 'MAXDOP'",
               "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()",
               "SELECT capture_instance, supports_net_changes FROM cdc.change_tables"]:

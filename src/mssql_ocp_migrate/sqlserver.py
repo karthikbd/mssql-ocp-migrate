@@ -327,6 +327,9 @@ class SqlServer(CatalogMixin, Database):
         n = 0
         coerce = _coercers(cols)
         variant = [c.type_name.lower() == "sql_variant" for c in cols]
+        from .ddl import type_sql
+        # json / vector don't convert implicitly from an nvarchar parameter; an explicit CAST does
+        holder = [f"CAST(? AS {type_sql(c)})" if c.type_name.lower() in ("json", "vector") else "?" for c in cols]
         if identity:
             self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} ON")
         try:
@@ -339,16 +342,16 @@ class SqlServer(CatalogMixin, Database):
                         vals = [f(v) for f, v in zip(coerce, r)] if coerce else list(r)
                         if any(variant):
                             cells = []
-                            for is_var, v in zip(variant, vals):
+                            for is_var, h, v in zip(variant, holder, vals):
                                 if is_var:
                                     cells.append(variant_write_sql(v))
                                 else:
-                                    cells.append("?")
+                                    cells.append(h)
                                     params.append(v)
                             rows_sql.append("(" + ", ".join(cells) + ")")
                         else:
                             params.extend(vals)
-                            rows_sql.append("(" + ", ".join("?" for _ in cols) + ")")
+                            rows_sql.append("(" + ", ".join(holder) + ")")
                     self.execute(f"INSERT INTO {self.qualified(table)} ({collist}) VALUES " + ", ".join(rows_sql),
                                  params)
                     n += len(part)

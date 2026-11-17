@@ -548,7 +548,8 @@ def module_statements(mod) -> List[str]:
     if meta.get("quoted_identifier") is False:
         before.append("SET QUOTED_IDENTIFIER OFF")
         after.append("SET QUOTED_IDENTIFIER ON")
-    out = before + [mod.definition.strip()] + after
+    # the text goes over byte for byte: a module signature (ADD SIGNATURE) covers it, whitespace included
+    out = before + [mod.definition] + after
     if mod.kind == "TRIGGER" and mod.disabled and mod.parent:
         out.append(f"DISABLE TRIGGER {q(mod.schema)}.{q(mod.name)} ON "
                    + ".".join(q(p) for p in mod.parent.split(".", 1)))

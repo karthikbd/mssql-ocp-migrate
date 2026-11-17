@@ -252,7 +252,7 @@ class Migrator:
             out += [x + go for x in ddl.fk_sql_all(t)]
         for mod in modules:
             if mod.kind not in SCHEMA_KINDS and mod.kind not in LATE_KINDS and mod.definition:
-                out += [x + ("\nGO" if x == mod.definition.strip() else go) for x in ddl.module_statements(mod)]
+                out += [x + ("\nGO" if x is mod.definition else go) for x in ddl.module_statements(mod)]
         out += [x + go for x in bindings]
         if extras is not None:
             out.append("-- ===== security, extended properties, database settings =====")
@@ -264,7 +264,7 @@ class Migrator:
             out += [x + go for x in self._after_settings_sql(tables, extras)]
         for mod in modules:
             if mod.kind in LATE_KINDS and mod.definition:
-                out += [x + ("\nGO" if x == mod.definition.strip() else go) for x in ddl.module_statements(mod)]
+                out += [x + ("\nGO" if x is mod.definition else go) for x in ddl.module_statements(mod)]
         if extras is not None and mc.copy_security:
             out += [ddl.permission_sql(p) + go for p in extras.permissions
                     if p.securable_class in LATE_PERMISSION_CLASSES]
