@@ -39,7 +39,15 @@ validation checks each item:
 
 `lift` gains `update_statistics_after` (`sp_updatestats` after cut-over), `copy_agent_jobs` and
 `copy_linked_servers`, and `lift plan` warns when the target is a newer SQL Server version. The
-end-to-end suite now runs in CI against two SQL Server 2022 containers. Each new copy step has a `copy_*` switch that also
+end-to-end suite now runs in CI against two SQL Server 2022 containers.
+
+**Fixes found by running against real servers.** The bulk-insert path wrote `varbinary(max)` in
+a way that could corrupt the row stream, and rejected `binary(n)`, `char`/`nchar`, `xml`,
+column sets and `hierarchyid` columns; all of these now load, and if SQL Server ever rejects a
+column the error names it and the table falls back to `INSERT`. Byte-string parameters are sent
+as binary. Worker processes are spawned rather than forked, so scripts that use the Python API
+need an `if __name__ == "__main__":` guard. `lift seed` no longer uses `COPY_ONLY` on a database
+whose log chain was never started. See the changelog for the full list. Each new copy step has a `copy_*` switch that also
 controls its validation; all default to on.
 
 ## 0.2.1 (November 2026)
