@@ -259,10 +259,13 @@ class SqlServer(CatalogMixin, Database):
         out = []
         for c in cols:
             flags = tds_base.Column.fNullable if c.nullable else 0
+            typ = pytds_type(c)
             if c.type_name.lower() == "binary" and not c.encrypted:
                 out.append(_BinaryColumn(c.max_length, name=c.name, flags=flags))
+            elif type(typ).__name__ == "VarBinaryMaxType":
+                out.append(_VarBinaryMaxColumn(name=c.name, type=typ, flags=flags))
             else:
-                out.append(tds_base.Column(name=c.name, type=pytds_type(c), flags=flags))
+                out.append(tds_base.Column(name=c.name, type=typ, flags=flags))
         return out
 
     def _insert_bulk_pytds(self, target_name: str, table: Optional[Table], cols: Sequence[Column],
@@ -519,6 +522,30 @@ def _binary_serializer_class():
             return f"Binary({self.size})"
 
     return BinarySerializer
+
+
+def _VarBinaryMaxColumn(**kw):
+    """varbinary(max) for INSERT BULK, written with an unknown PLP length. The bundled driver
+    writes the actual length, which breaks the bulk row stream (the server then reports invalid
+    lengths in the following columns); it already uses PLP_UNKNOWN for (n)varchar(max)."""
+    from ._vendor.pytds import tds_base, tds_types
+
+    class VarBinaryMaxBulkSerializer(tds_types.VarBinarySerializerMax):
+        def write(self, w, val):
+            if val is None:
+                w.put_uint8(tds_base.PLP_NULL)
+                return
+            w.put_uint8(tds_base.PLP_UNKNOWN)
+            if len(val) > 0:
+                w.put_uint(len(val))
+                w.write(val)
+            w.put_uint(0)
+
+    class VarBinaryMaxColumn(tds_base.Column):
+        def choose_serializer(self, type_factory, collation):
+            return VarBinaryMaxBulkSerializer()
+
+    return VarBinaryMaxColumn(**kw)
 
 
 def _BinaryColumn(size: int, **kw):

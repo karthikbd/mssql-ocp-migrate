@@ -188,3 +188,22 @@ def test_bulk_metadata_rejection_names_the_column_and_falls_back_to_insert():
     db.bulk_load(t, [], False)
     assert calls == ["rows"]
     S._PYTDS_NO_BULK.discard("dbo.T")
+
+
+def test_varbinary_max_is_written_with_unknown_plp_length():
+    """Known PLP lengths break INSERT BULK; (n)varchar(max) and varbinary(max) all use PLP_UNKNOWN."""
+    factory = tds_types.SerializerFactory(tds_base.TDS74)
+    meta = SqlServer._bulk_metadata(None, "t", None, [Column("p", "varbinary", -1)])[0]
+    ser = meta.choose_serializer(type_factory=factory, collation=raw_collation)
+    sink = _Sink()
+    w = _TdsWriter(sink, 4096, _Session())
+    w.begin_packet(tds_base.PacketType.BULK)
+    ser.write(w, b"\x01\x02\x03")
+    ser.write(w, b"")
+    ser.write(w, None)
+    w.flush()
+    body = bytes(sink.data[8:])
+    unknown = tds_base.PLP_UNKNOWN.to_bytes(8, "little")
+    assert body == (unknown + (3).to_bytes(4, "little") + b"\x01\x02\x03" + b"\x00" * 4
+                    + unknown + b"\x00" * 4
+                    + tds_base.PLP_NULL.to_bytes(8, "little"))
