@@ -198,7 +198,8 @@ def test_extended_properties_security_and_settings(migrated):
                CASE WHEN p.class = 1 THEN COL_NAME(p.major_id, p.minor_id) END
         FROM sys.database_permissions p JOIN sys.database_principals g ON g.principal_id = p.grantee_principal_id
         WHERE g.name IN ('reporting', 'etl_svc') AND p.permission_name <> 'CONNECT' ORDER BY 1, 2, 4, 5""")
-    assert a == b and len(a) == 5
+    assert rows(a) == rows(b)
+    assert len(a) == 6 and ("SERVICE", "SEND", "GRANT", "reporting", None, None) in rows(b)  # broker grant
     a, b = both(migrated, "SELECT p.name FROM sys.schemas s JOIN sys.database_principals p "
                           "ON p.principal_id = s.principal_id WHERE s.name = 'audit'")
     assert [tuple(r) for r in a] == [tuple(r) for r in b] == [("etl_svc",)]

@@ -39,10 +39,10 @@ def test_lift_seed_catchup_cutover_verify(tmp_path):
     src = connect(conn_cfg("source", "e2e_src"))
     src.execute("INSERT dbo.Empty (Id, V) VALUES (1, 'after-seed')")       # change while "online"
     assert lift.catch_up_once("e2e_src") >= 1
-    src.execute("INSERT dbo.Empty (Id, V) VALUES (2, 'before-cutover')")
+    src.execute("INSERT dbo.Empty (Id, V) VALUES (2, 'pre-cut')")
     lift.cutover("e2e_src")
     tgt = connect(conn_cfg("target", "e2e_lift"))
-    assert tgt.query("SELECT Id, V FROM dbo.Empty ORDER BY Id") == [(1, "after-seed"), (2, "before-cutover")]
+    assert tgt.query("SELECT Id, V FROM dbo.Empty ORDER BY Id") == [(1, "after-seed"), (2, "pre-cut")]
     r = lift.verify("e2e_src")
     assert r["ok"], r
     src.close()
