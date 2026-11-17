@@ -233,8 +233,9 @@ def test_column_from_row_kinds():
     assert x.xml_schema == "sales.S" and x.xml_document
 
 
-def irow(oid, iid, name, tdesc, col, *, uniq=0, pk=0, uc=0, key=1, desc=0, incl=0, bucket=None):
-    return (oid, iid, name, tdesc, uniq, pk, uc, None, key, desc, incl, col, 0, 0, 0, 1, 1, "NONE", None, bucket, 0)
+def irow(oid, iid, name, tdesc, col, *, uniq=0, pk=0, uc=0, key=1, desc=0, incl=0, bucket=None, disabled=0):
+    return (oid, iid, name, tdesc, uniq, pk, uc, None, key, desc, incl, col, 0, 0, 0, 1, 1, "NONE", None, bucket, 0,
+            disabled)
 
 
 MODULE_ANSWERS = [
@@ -265,9 +266,13 @@ MODULE_ANSWERS = [
     ("FROM sys.fulltext_stopwords", [(5, "foo", 1033)]),
     ("FROM sys.fulltext_stoplists", [(5, "MyStops")]),
     ("SELECT is_cdc_enabled FROM sys.databases", [(0,)]),
+    ("te.is_first = 1 OR te.is_last = 1", [(2001, 1, "INSERT"), (2001, 0, "DELETE"), (3001, 1, "CREATE_TABLE")]),
     ("LEFT JOIN sys.triggers tr ON tr.object_id = o.object_id", [
-        ("V ", "sales", "vOrders", "CREATE VIEW sales.vOrders AS SELECT 1 AS x", None, 0),
-        ("R ", "dbo", "rPositive", "CREATE RULE dbo.rPositive AS @v > 0", None, 0)]),
+        (1, "V ", "sales", "vOrders", "CREATE VIEW sales.vOrders AS SELECT 1 AS x", None, 0, 1, 1),
+        (2, "R ", "dbo", "rPositive", "CREATE RULE dbo.rPositive AS @v > 0", None, 0, 1, 1),
+        (3, "P ", "dbo", "usp_Legacy", "CREATE PROCEDURE dbo.usp_Legacy AS SELECT \"x\" WHERE NULL = NULL", None, 0, 0, 0),
+        (2001, "TR", "dbo", "trg_First", "CREATE TRIGGER dbo.trg_First ON dbo.Place AFTER INSERT, DELETE AS SET NOCOUNT ON",
+         "dbo.Place", 1, 1, 1)]),
     ("FROM sys.assembly_modules am", [
         (1001, "PC", "geo", "usp_Near", "GeoLib", "Geo.Procs", "Near", 0, None, None, None),
         (1002, "FS", "geo", "fnDist", "GeoLib", "Geo.Funcs", "Dist", 1, -2, None, None),
@@ -296,7 +301,8 @@ MODULE_ANSWERS = [
     ("service_broker_guid", [("ABC-123",)]),
     ("FROM sys.event_notifications en", [(77, "LogDDL", "//shop/Audit", "abc-123", "CREATE_TABLE"),
                                          (77, "LogDDL", "//shop/Audit", "abc-123", "ALTER_TABLE")]),
-    ("WHERE t.parent_class = 0", [("ddl_audit", "CREATE TRIGGER ddl_audit ON DATABASE FOR CREATE_TABLE AS PRINT 1", 1)]),
+    ("WHERE t.parent_class = 0", [(3001, "ddl_audit", "CREATE TRIGGER ddl_audit ON DATABASE FOR CREATE_TABLE AS PRINT 1",
+                                   1, 1, 1)]),
     ("FROM sys.plan_guides pg", [("pg1", 1, "SELECT 1", "OBJECT", "sales", "usp", None, None, "OPTION (MAXDOP 1)")]),
 ]
 
@@ -365,6 +371,19 @@ def test_list_modules_every_kind_in_dependency_order():
         "N'current database'")
     ddl_trg = by[("DDL TRIGGER", "ddl_audit")]
     assert ddl_trg.disabled and ddl_trg.schema == ""
+    assert ddl.module_statements(ddl_trg)[1:] == [
+        "DISABLE TRIGGER [ddl_audit] ON DATABASE",
+        "EXEC sys.sp_settriggerorder @triggername = N'[ddl_audit]', @order = N'First', @stmttype = N'CREATE_TABLE', "
+        "@namespace = N'DATABASE'"]
+    legacy = by[("PROCEDURE", "usp_Legacy")]
+    assert ddl.module_statements(legacy) == ["SET ANSI_NULLS OFF", "SET QUOTED_IDENTIFIER OFF",
+                                             legacy.definition, "SET ANSI_NULLS ON", "SET QUOTED_IDENTIFIER ON"]
+    trg = by[("TRIGGER", "trg_First")]
+    assert ddl.module_statements(trg) == [
+        trg.definition, "DISABLE TRIGGER [dbo].[trg_First] ON [dbo].[Place]",
+        "EXEC sys.sp_settriggerorder @triggername = N'[dbo].[trg_First]', @order = N'First', @stmttype = N'INSERT'",
+        "EXEC sys.sp_settriggerorder @triggername = N'[dbo].[trg_First]', @order = N'Last', @stmttype = N'DELETE'"]
+    assert ddl.module_statements(by[("VIEW", "vOrders")]) == [by[("VIEW", "vOrders")].definition]
     assert by[("PLAN GUIDE", "pg1")].definition == (
         "EXEC sys.sp_create_plan_guide @name = N'pg1', @stmt = N'SELECT 1', @type = N'OBJECT', "
         "@module_or_batch = N'[sales].[usp]', @params = NULL, @hints = N'OPTION (MAXDOP 1)';\n"
@@ -376,27 +395,59 @@ def test_list_modules_every_kind_in_dependency_order():
 
 def test_server_level_catalog():
     s = fake_server([
-        ("WHERE sp.name = ?", [("S", "0x01", "0x0200AB", "master", 1, 0, 1)]),
-        ("sys.server_role_members", [("dbcreator",)]),
+        ("WHERE sp.name = ?", [("S", "0x01", "0x0200AB", "master", 1, 0, 1, "British")]),
+        ("sys.server_role_members", [("dbcreator", 1), ("monitoring", 0)]),
+        ("FROM sys.server_permissions p", [("GRANT", "VIEW SERVER STATE", 100, None),
+                                           ("GRANT_WITH_GRANT_OPTION", "IMPERSONATE", 101, "etl_login")]),
     ])
     logins, errors = s.server_logins([Principal("app", "SQL_USER", login="app_login"),
                                       Principal("svc", "NO_LOGIN")])
     assert errors == [] and logins[0][0] == "app_login"
-    assert logins[0][1] == ("CREATE LOGIN [app_login] WITH PASSWORD = 0x0200AB HASHED, SID = 0x01, DEFAULT_DATABASE = "
-                            "[master], CHECK_POLICY = ON, CHECK_EXPIRATION = OFF;\nALTER LOGIN [app_login] DISABLE;\n"
-                            "ALTER SERVER ROLE [dbcreator] ADD MEMBER [app_login]")
+    assert logins[0][1].split(";\n") == [
+        "CREATE LOGIN [app_login] WITH PASSWORD = 0x0200AB HASHED, SID = 0x01, DEFAULT_DATABASE = [master], "
+        "CHECK_POLICY = ON, CHECK_EXPIRATION = OFF",
+        "ALTER LOGIN [app_login] WITH DEFAULT_LANGUAGE = [British]",
+        "ALTER LOGIN [app_login] DISABLE",
+        "ALTER SERVER ROLE [dbcreator] ADD MEMBER [app_login]",
+        "IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'monitoring' AND type = 'R') "
+        "CREATE SERVER ROLE [monitoring]",
+        "GRANT VIEW SERVER STATE TO [monitoring]",
+        "GRANT IMPERSONATE ON LOGIN::[etl_login] TO [monitoring] WITH GRANT OPTION",
+        "ALTER SERVER ROLE [monitoring] ADD MEMBER [app_login]",
+        "GRANT VIEW SERVER STATE TO [app_login]",
+        "GRANT IMPERSONATE ON LOGIN::[etl_login] TO [app_login] WITH GRANT OPTION"]
     no_hash = fake_server([("WHERE sp.name = ?", [("S", "0x01", None, "master", 1, 0, 0)])])
     assert "CONTROL SERVER" in no_hash.server_logins([Principal("a", "SQL_USER", login="a")])[1][0]
-    jobs = fake_server([
-        ("FROM msdb.dbo.sysjobs j", [("J1", "Nightly", "rebuild", "Database Maintenance", "sa", 1, 0, 3)]),
+    answers = [
+        ("FROM msdb.dbo.sysjobs j", [("J1", "Nightly", "rebuild", "Database Maintenance", "sa", 1, 1, 3)]),
+        ("FROM msdb.dbo.sysoperators", [("DBA team", 1, "dba@example.com", None)]),
         ("FROM msdb.dbo.sysjobsteps WHERE", [(1, "rebuild", "TSQL", "EXEC dbo.usp", "src", None, 1, 0, 2, 0, 0, 0,
                                               None, 0, 5)]),
         ("FROM msdb.dbo.sysjobschedules js", [("daily", 1, 4, 1, 1, 0, 0, 0, 20240101, 99991231, 10000, 235959)]),
-    ]).agent_jobs("src", "tgt")
-    name, stmts, warns = jobs[0]
-    assert name == "Nightly" and "@enabled = 0" in stmts[1] and "@database_name = N'tgt'" in stmts[2]
+    ]
+    name, stmts, warns = fake_server(answers).agent_jobs("src", "tgt")[0]
+    assert name == "Nightly" and stmts[0].endswith(
+        "EXEC msdb.dbo.sp_add_operator @name = N'DBA team', @enabled = 1, @email_address = N'dba@example.com'")
+    assert "@enabled = 0" in stmts[2] and "@database_name = N'tgt'" in stmts[3]
+    assert any("@notify_email_operator_name = N'DBA team'" in x and "@notify_level_email = 1" in x for x in stmts)
     assert stmts[-1].endswith("@server_name = N'(local)'") and any("@freq_type = 4" in x for x in stmts)
-    assert len(warns) == 2                       # operator notification + proxy
+    assert len(warns) == 2                       # Database Mail for the operator + proxy
+    answers[2] = ("FROM msdb.dbo.sysjobsteps WHERE", [(1, "copy", "CmdExec", "robocopy", None, None, 1, 0, 2, 0, 0, 0,
+                                                       None, 0, None)])
+    name, stmts, warns = fake_server(answers).agent_jobs("src", "tgt", linux_target=True)[0]
+    assert stmts == [] and "CmdExec" in warns[0]
+    assert fake_server(answers).agent_jobs("src", "tgt")[0][1]          # a Windows target still gets it
+    msgs = fake_server([
+        ("FROM sys.sql_modules WHERE definition", [("RAISERROR(50010, 16, 1); SELECT FORMATMESSAGE(50011)",),
+                                                   ("RAISERROR('plain', 16, 1)",)]),
+        ("FROM sys.messages m", [(50010, 1031, "Deutsch", 16, 0, "Fehler %d"), (50010, 1033, "us_english", 16, 1,
+                                                                                 "Error %d")]),
+    ]).custom_messages()
+    assert msgs == [(50010, [
+        ("us_english", "EXEC sys.sp_addmessage @msgnum = 50010, @severity = 16, @msgtext = N'Error %d', "
+                       "@lang = N'us_english', @with_log = TRUE"),
+        ("Deutsch", "EXEC sys.sp_addmessage @msgnum = 50010, @severity = 16, @msgtext = N'Fehler %d', "
+                    "@lang = N'Deutsch', @with_log = FALSE")])]
     links = fake_server([
         ("FROM sys.servers WHERE is_linked = 1", [(1, "HQ", "SQL Server", "SQLNCLI", "hq", None, None, None,
                                                    1, 1, 1, 0, 1, None, 0, 0)]),
@@ -451,7 +502,7 @@ class FakeSrc:
     def rls_hidden_rows(self, tables):
         return self.hidden
 
-    def agent_jobs(self, a, b):
+    def agent_jobs(self, a, b, linux=False):
         return self.jobs
 
     def linked_servers(self):

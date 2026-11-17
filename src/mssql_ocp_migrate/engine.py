@@ -136,6 +136,7 @@ class RunResult:
     warnings: List[str] = field(default_factory=list)
     identity_strategy: Dict[str, str] = field(default_factory=dict)
     validation: Any = None
+    assessment: Any = None          # assess.Assessment (readiness findings)
 
     @property
     def rows(self) -> int:
@@ -242,7 +243,8 @@ class Migrator:
         for mod in modules:
             if mod.kind in SCHEMA_KINDS:
                 out += [x + go for x in self._schema_module_sql(mod)]
-        out += [self._create_table(t) + go for t in tables]
+        for t in tables:
+            out += [self._create_table(t) + go] + [x + go for x in ddl.disabled_indexes_sql(t)]
         out.append("-- ===== after data load =====")
         for t in tables:
             out += [x + go for x in self._table_post_sql(t)]
@@ -250,7 +252,7 @@ class Migrator:
             out += [x + go for x in ddl.fk_sql_all(t)]
         for mod in modules:
             if mod.kind not in SCHEMA_KINDS and mod.kind not in LATE_KINDS and mod.definition:
-                out.append(mod.definition.strip() + "\nGO")
+                out += [x + ("\nGO" if x == mod.definition.strip() else go) for x in ddl.module_statements(mod)]
         out += [x + go for x in bindings]
         if extras is not None:
             out.append("-- ===== security, extended properties, database settings =====")
@@ -262,7 +264,7 @@ class Migrator:
             out += [x + go for x in self._after_settings_sql(tables, extras)]
         for mod in modules:
             if mod.kind in LATE_KINDS and mod.definition:
-                out.append(mod.definition.strip() + "\nGO")
+                out += [x + ("\nGO" if x == mod.definition.strip() else go) for x in ddl.module_statements(mod)]
         if extras is not None and mc.copy_security:
             out += [ddl.permission_sql(p) + go for p in extras.permissions
                     if p.securable_class in LATE_PERMISSION_CLASSES]
@@ -305,6 +307,7 @@ class Migrator:
                 out += [ddl.owner_change_sql("CERTIFICATE", c.name, c.owner) for c in ex.certificates if c.owner]
             out += [ddl.role_member_sql(r, mem) for r, mem in ex.role_members]
             out += [ddl.schema_owner_sql(sch, own) for sch, own in ex.schema_owners.items()]
+            out += [ddl.object_owner_sql(s, n, o) for s, n, o in ex.object_owners]
             out += [ddl.permission_sql(p) for p in ex.permissions if p.securable_class not in LATE_PERMISSION_CLASSES]
         if m.copy_certificates:
             out += [ddl.signature_sql(sg) for sg in ex.signatures]
@@ -338,11 +341,15 @@ class Migrator:
         resume = m.if_target_not_empty == "resume" or sharded
         state = State.load_or_new(state_path) if resume else State(state_path)
         modules: List[ModuleDef] = []
+        if lead and m.create_target_database and isinstance(self.factory, SqlServerFactory):
+            self._ensure_target_database()
         src = self.factory("source", True)
         tgt = self.factory("target", True)
         try:
             res.source_info = getattr(src, "server_info", lambda: {})()
             res.target_info = getattr(tgt, "server_info", lambda: {})()
+            if lead and m.assess and not state.phase_done("schema"):
+                self._assess(src, tgt, res)
             sc, tc = res.source_info.get("collation"), res.target_info.get("collation")
             if sc and tc and sc != tc:
                 res.warnings.append(f"database collation differs: source {sc}, target {tc}. Columns keep their "
@@ -360,6 +367,8 @@ class Migrator:
                           f"~{sum(t.reserved_mb for t in tables):,.0f} MB on source"
                           + (f" | shard {m.shard_index + 1}/{m.shard_count}" if sharded else ""))
             modules = self._modules(src)
+            if lead and "change_tracking_version" not in state.data:
+                self._record_change_tracking(src, tables, state)
             if lead and not state.phase_done("schema"):
                 self._preflight_source(src, tables, res)
                 self._preflight_target(tgt, tables)
@@ -504,6 +513,79 @@ class Migrator:
                 raise MigrationError("target tables already exist: " + ", ".join(t.fqn for t in existing[:10])
                                      + " (drop them, use schema_mode = \"skip\", or resume)")
 
+    def _assess(self, src: Database, tgt: Database, res: RunResult) -> None:
+        """Readiness checks (Linux/OpenShift compatibility, version, edition, storage, server
+        differences). Blockers for the copy itself stop the run unless ignore_blockers is set; the
+        rest become warnings, and everything is in the report."""
+        if not hasattr(src, "query") or not hasattr(tgt, "query"):
+            return
+        from .assess import BLOCKER, COPY_BLOCKING_AREAS, WARNING, assess
+        try:
+            a = assess(src, tgt, self.cfg.source.database)
+        except Exception as exc:  # pragma: no cover - never let the assessment stop a migration
+            res.warnings.append(f"readiness assessment skipped: {exc}")
+            return
+        res.assessment = a
+        if self.cfg.migration.compatibility_level != "source":      # the configured level replaces the source's
+            a.findings = [f for f in a.findings if not (f.area == "Version" and f.item == "compatibility level")]
+        fatal = [f for f in a.blockers if f.area in COPY_BLOCKING_AREAS]
+        for f in a.findings:
+            if f.severity in (BLOCKER, WARNING) and f not in fatal:
+                res.warnings.append(f.text())
+        if fatal and not self.cfg.migration.ignore_blockers:
+            raise MigrationError("readiness assessment found blockers:\n  " + "\n  ".join(f.text() for f in fatal)
+                                 + "\n(set migration.ignore_blockers = true to continue anyway)")
+        if a.blockers:
+            self.progress(f"assessment: {len(a.blockers)} blockers for the application on the target "
+                          "(see the report); the copy continues")
+
+    def _record_change_tracking(self, src: Database, tables: List[Table], state: State) -> None:
+        """Remember the source's change-tracking version before any data is copied, so `sync` can
+        apply everything that changes during and after the copy."""
+        if not hasattr(src, "query"):
+            return
+        try:
+            if self.cfg.migration.sync_enable_change_tracking:
+                from .sync import enable_change_tracking
+                done = enable_change_tracking(src, tables, self.cfg.migration.sync_retention_days)
+                for t in tables:                  # keep the in-memory catalog in step with the source
+                    if t.fqn in done and t.change_tracking is None:
+                        t.change_tracking = False         # on, without TRACK_COLUMNS_UPDATED
+                if done:
+                    self.progress(f"change tracking enabled on the source for {len(done)} objects (for sync)")
+            v = src.query("SELECT CHANGE_TRACKING_CURRENT_VERSION()")[0][0]
+        except Exception as exc:  # not SQL Server, or no permission
+            log.debug("change tracking version not recorded: %s", exc)
+            return
+        if v is not None:
+            state.data["change_tracking_version"] = int(v)
+            state.save()
+            self.progress(f"source change-tracking version {int(v)} recorded: `mssql-migrate sync` can catch up "
+                          "from here")
+
+    def _ensure_target_database(self) -> None:
+        """CREATE DATABASE on the target with the source database's collation and containment,
+        when it doesn't exist yet (create_target_database = true)."""
+        import dataclasses
+        from .sqlserver import SqlServer
+        name = self.cfg.target.database
+        master = SqlServer(dataclasses.replace(self.cfg.target, database="master"), "target", autocommit=True)
+        try:
+            if master.query("SELECT DB_ID(?)", [name])[0][0] is not None:
+                return
+            src = self.factory("source", True)
+            try:
+                coll, contain = src.query("SELECT collation_name, containment_desc FROM sys.databases "
+                                          "WHERE name = DB_NAME()")[0]
+            finally:
+                src.close()
+            sql = f"CREATE DATABASE {ddl.q(name)}" + (" CONTAINMENT = PARTIAL" if contain == "PARTIAL" else "") \
+                + f" COLLATE {coll}"
+            self.progress(f"creating target database: {sql}")
+            master.execute(sql)
+        finally:
+            master.close()
+
     def _preflight_source(self, src: Database, tables: List[Table], res: RunResult) -> None:
         """Refuse to copy data the migration login can't fully see, and point out server-level
         objects that stay behind."""
@@ -577,6 +659,8 @@ class Migrator:
         for t in tables:
             if not tgt.table_exists(t):
                 self._ddl(tgt, self._create_table(t), f"table {t.fqn}", res)
+                for sql in ddl.disabled_indexes_sql(t):
+                    self._ddl(tgt, sql, f"disabled index on {t.fqn}", res)
                 if not m.create_indexes_after_load:
                     for sql in ddl.post_load_sql(t, self._build_options(), m.memory_optimized == "keep"):
                         self._ddl(tgt, sql, f"index/constraint on {t.fqn}", res, ignore_exists=True)
@@ -712,6 +796,9 @@ class Migrator:
             for sch, owner in ex.schema_owners.items():
                 if owner not in skipped:
                     self._ddl(tgt, ddl.schema_owner_sql(sch, owner), f"owner of schema {sch}", res)
+            for sch, name, owner in ex.object_owners:
+                if owner not in skipped:
+                    self._ddl(tgt, ddl.object_owner_sql(sch, name, owner), f"owner of {sch}.{name}", res)
             for perm in ex.permissions:
                 if perm.grantee not in skipped and perm.securable_class not in LATE_PERMISSION_CLASSES:
                     self._ddl(tgt, ddl.permission_sql(perm), f"permission {perm.permission} to {perm.grantee}", res)
@@ -787,22 +874,36 @@ class Migrator:
     def _server_objects(self, src: Database, tgt: Database, res: RunResult) -> None:
         m = self.cfg.migration
         query = getattr(tgt, "query", None)
+        linux = bool(getattr(tgt, "is_linux", lambda: False)())
+        if m.copy_custom_messages and hasattr(src, "custom_messages"):
+            self._copy_messages(src, tgt, res)
+        if m.copy_server_configuration and hasattr(src, "configuration"):
+            self._copy_configuration(src, tgt, res)
+        if m.copy_server_triggers and hasattr(src, "server_triggers"):
+            for name, definition, disabled in src.server_triggers():
+                if query("SELECT COUNT(*) FROM sys.server_triggers WHERE name = ?", [name])[0][0]:
+                    continue
+                self._ddl(tgt, definition, f"server trigger {name}", res)
+                # a logon trigger that misbehaves on the new server can lock everyone out: created disabled
+                self._ddl(tgt, f"DISABLE TRIGGER {ddl.q(name)} ON ALL SERVER", f"server trigger {name}", res)
+                res.warnings.append(f"server trigger {name} was created DISABLED"
+                                    + (" (it was disabled on the source too)" if disabled else ": enable it after testing"))
         if m.copy_agent_jobs and hasattr(src, "agent_jobs"):
             try:
-                jobs = src.agent_jobs(self.cfg.source.database, self.cfg.target.database)
+                jobs = src.agent_jobs(self.cfg.source.database, self.cfg.target.database, linux)
             except Exception as exc:
                 jobs = []
                 res.ddl_errors.append({"object": "SQL Agent jobs", "error": f"msdb not readable on the source: {exc}"})
             for name, stmts, warns in jobs:
                 res.warnings.extend(warns)
-                if query("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = ?", [name])[0][0]:
+                if not stmts or query("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = ?", [name])[0][0]:
                     continue
                 self.progress(f"creating SQL Agent job {name} (disabled)")
                 for sql in stmts:
                     self._ddl(tgt, sql, f"agent job {name}", res)
-            if jobs:
-                res.warnings.append(f"{len(jobs)} SQL Agent jobs were created DISABLED on the target: enable them "
-                                    "at cut-over and disable them on the source")
+            if any(stmts for _, stmts, _ in jobs):
+                res.warnings.append(f"{sum(1 for _, s, _ in jobs if s)} SQL Agent jobs were created DISABLED on the "
+                                    "target: enable them at cut-over and disable them on the source")
         if m.copy_linked_servers and hasattr(src, "linked_servers"):
             try:
                 links = src.linked_servers()
@@ -815,6 +916,41 @@ class Migrator:
                     continue
                 for sql in stmts:
                     self._ddl(tgt, sql, f"linked server {name}", res)
+
+    def _copy_messages(self, src: Database, tgt: Database, res: RunResult) -> None:
+        """User-defined messages the code raises (RAISERROR(50001, ...)), unless the target already
+        has that number: messages are server-wide and may belong to another application there."""
+        try:
+            msgs = src.custom_messages()
+        except Exception as exc:
+            res.warnings.append(f"user-defined messages not read from the source: {exc}")
+            return
+        for mid, stmts in msgs:
+            existing = tgt.query("SELECT text FROM sys.messages WHERE message_id = ? AND language_id = 1033", [mid])
+            if existing:
+                english = next((s for lang, s in stmts if lang == "us_english"), "")
+                if existing[0][0] and ddl.lit(existing[0][0]) not in english:
+                    res.warnings.append(f"user-defined message {mid} already exists on the target with a different "
+                                        "text; left as is")
+                continue
+            self.progress(f"adding user-defined message {mid}")
+            for _lang, sql in stmts:
+                self._ddl(tgt, sql, f"message {mid}", res)
+
+    def _copy_configuration(self, src: Database, tgt: Database, res: RunResult) -> None:
+        """sp_configure values from the curated list that is safe to align (copy_server_configuration)."""
+        from .assess import APPLICABLE_CONFIGURATION
+        s, t = src.configuration(), tgt.configuration()
+        changes = [(n, s[n]) for n in sorted(APPLICABLE_CONFIGURATION) if n in s and n in t and s[n] != t[n]]
+        if not changes:
+            return
+        self._ddl(tgt, "EXEC sys.sp_configure 'show advanced options', 1; RECONFIGURE", "sp_configure", res)
+        for name, value in changes:
+            self.progress(f"sp_configure '{name}' {t[name]} -> {value}")
+            self._ddl(tgt, f"EXEC sys.sp_configure {ddl.lit(name)}, {int(value)}; RECONFIGURE",
+                      f"sp_configure {name}", res)
+        if not s.get("show advanced options"):
+            self._ddl(tgt, "EXEC sys.sp_configure 'show advanced options', 0; RECONFIGURE", "sp_configure", res)
 
     def _enable_policies(self, tables: List[Table], modules: List[ModuleDef], res: RunResult) -> None:
         """Row-level security policies are created switched off so they can't hide rows from the
@@ -844,12 +980,14 @@ class Migrator:
                     errors[mod.fqn] = "definition not readable (WITH ENCRYPTION?)"
                     continue
                 try:
-                    tgt.execute(mod.definition)
-                    if mod.kind == "TRIGGER" and mod.disabled and mod.parent:
-                        tgt.execute(f"DISABLE TRIGGER {ddl.q(mod.schema)}.{ddl.q(mod.name)} ON "
-                                    + ".".join(ddl.q(p) for p in mod.parent.split(".", 1)))
-                    if mod.kind == "DDL TRIGGER" and mod.disabled:
-                        tgt.execute(f"DISABLE TRIGGER {ddl.q(mod.name)} ON DATABASE")
+                    try:
+                        for stmt in ddl.module_statements(mod):
+                            tgt.execute(stmt)
+                    finally:          # never leave the session with ANSI_NULLS / QUOTED_IDENTIFIER OFF
+                        if (mod.meta or {}).get("ansi_nulls") is False:
+                            tgt.execute("SET ANSI_NULLS ON")
+                        if (mod.meta or {}).get("quoted_identifier") is False:
+                            tgt.execute("SET QUOTED_IDENTIFIER ON")
                     tgt.commit()
                     errors.pop(mod.fqn, None)
                     progress = True
@@ -988,6 +1126,7 @@ def scoped_extras(ex: DatabaseExtras, tables: List[Table], modules: List[ModuleD
     return DatabaseExtras(
         settings=ex.settings, principals=list(ex.principals), role_members=list(ex.role_members),
         schema_owners=dict(ex.schema_owners),
+        object_owners=[o for o in ex.object_owners if (o[0], o[1]) in objects],
         permissions=[p for p in ex.permissions
                      if p.securable_class != "OBJECT" or (p.schema, p.securable) in objects],
         extended_properties=[e for e in ex.extended_properties if in_scope(e.level)],

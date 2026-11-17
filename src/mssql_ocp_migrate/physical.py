@@ -469,8 +469,31 @@ class Lift:
             p.warnings.append("Express edition cannot hold databases over 10 GB")
         if "Standard" in s_ed and self.lift.compression:
             p.warnings.append("backup compression is available on Standard from 2008 R2 onward")
+        if getattr(self.lift, "assess", True):
+            self._assess_db(s, t, db, p)
         p.timeline = estimate_timeline(p, self.lift)
         return p
+
+    def _assess_db(self, s, t, db: str, p) -> None:
+        """Readiness assessment for a physical copy: Linux-unsupported features become blockers
+        (FILESTREAM can't even be restored), the rest warnings."""
+        from .assess import BLOCKER, COPY_BLOCKING_AREAS, WARNING, assess
+        try:
+            s.execute(f"USE {q(db)}")
+            a = assess(s, t, db, lift=True)
+        except Exception as exc:  # pragma: no cover - never let the assessment break planning
+            p.warnings.append(f"readiness assessment skipped: {exc}")
+            return
+        finally:
+            try:
+                s.execute("USE [master]")
+            except Exception:
+                pass
+        for f in a.findings:
+            if f.severity == BLOCKER and f.area in COPY_BLOCKING_AREAS and f.area != "Version":  # version: above
+                p.blockers.append(f"{f.item}: {f.message}" + (f" ({f.fix})" if f.fix else ""))
+            elif f.severity in (BLOCKER, WARNING):
+                p.warnings.append(f"{f.item}: {f.message}" + (f" ({f.fix})" if f.fix else ""))
 
     # -- seed: full backup + restore ---------------------------------------------
     def _log_chain_started(self, db: str) -> bool:
@@ -687,7 +710,11 @@ class Lift:
             if self.lift.checkdb_after:
                 LongOp(self.cfg.target, self.progress, connect_fn=self._connect).run(
                     f"DBCC CHECKDB ({q(tdb)}) WITH PHYSICAL_ONLY, NO_INFOMSGS", f"{tdb} CHECKDB")
-            if self.lift.copy_agent_jobs or self.lift.copy_linked_servers:
+            try:
+                notes += self.reprovision_master_key(s, t, db, tdb)
+            except Exception as exc:
+                notes.append(f"database master key not re-encrypted: {exc}")
+            if self.lift.copy_agent_jobs or self.lift.copy_linked_servers or self.lift.copy_custom_messages:
                 notes += self.copy_server_objects(s, t, db, tdb)
             if self.lift.update_statistics_after:
                 LongOp(self.cfg.target, self.progress, connect_fn=self._connect).run(
@@ -700,13 +727,14 @@ class Lift:
         for n in notes:
             self.progress(f"{db}: {n}")
 
-    def copy_server_objects(self, s, t, db: str, tdb: str) -> List[str]:
-        """SQL Agent jobs with steps in the database (created disabled) and linked servers."""
+    @staticmethod
+    def _catalog(conn):
+        """The logical engine's catalog queries over a lift connection (server objects, logins)."""
         from .catalog import CatalogMixin
 
         class _Catalog(CatalogMixin):
-            def __init__(self, conn):
-                self.conn = conn
+            def __init__(self, c):
+                self.conn = c
 
             def query(self, sql, params=None):
                 return self.conn.query(sql, params)
@@ -714,11 +742,29 @@ class Lift:
             def _has_col(self, view, col):
                 return self.conn.scalar("SELECT COL_LENGTH(?, ?)", [view, col]) is not None
 
-        cat, notes = _Catalog(s), []
+        return _Catalog(conn)
+
+    def copy_server_objects(self, s, t, db: str, tdb: str) -> List[str]:
+        """SQL Agent jobs with steps in the database (created disabled), linked servers, and the
+        user-defined messages the database's code raises."""
+        cat, notes = self._catalog(s), []
+        if getattr(self.lift, "copy_custom_messages", False):
+            try:
+                msgs = self._in_db(s, db, cat.custom_messages)
+            except Exception as exc:
+                msgs = []
+                notes.append(f"user-defined messages not read: {exc}")
+            for mid, stmts in msgs:
+                if t.scalar("SELECT COUNT(*) FROM sys.messages WHERE message_id = ?", [mid]):
+                    continue
+                for _lang, sql in stmts:
+                    t.execute(sql)
+                notes.append(f"added user-defined message {mid}")
+        linux = bool(self._catalog(t).is_linux())
         if self.lift.copy_agent_jobs:
-            for name, stmts, warns in cat.agent_jobs(db, tdb):
+            for name, stmts, warns in cat.agent_jobs(db, tdb, linux):
                 notes += warns
-                if t.scalar("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = ?", [name]):
+                if not stmts or t.scalar("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = ?", [name]):
                     continue
                 for sql in stmts:
                     t.execute(sql)
@@ -733,27 +779,54 @@ class Lift:
                 notes.append(f"created linked server {name}")
         return notes
 
+    @staticmethod
+    def _in_db(conn, db: str, fn):
+        """Run a catalog function with ``db`` as the connection's current database."""
+        conn.execute(f"USE {q(db)}")
+        try:
+            return fn()
+        finally:
+            conn.execute("USE [master]")
+
     def copy_logins(self, s, t, db: str) -> List[str]:
-        """SQL logins mapped to users of this database, with the same SID and password hash
-        (the sp_help_revlogin / Copy-DbaLogin technique), so users are not orphaned."""
-        rows = s.query(f"""
-            SELECT sp.name, CONVERT(varchar(514), sp.sid, 1), CONVERT(varchar(514), CAST(LOGINPROPERTY(sp.name, 'PasswordHash') AS varbinary(256)), 1),
-                   sp.default_database_name, sl.is_policy_checked, sl.is_expiration_checked, sp.is_disabled
-            FROM {q(db)}.sys.database_principals dp
+        """Logins mapped to users of this database with the same SID and password hash (the
+        sp_help_revlogin / Copy-DbaLogin technique, so users aren't orphaned), Windows logins and
+        groups, their default language, server roles (user-defined ones created) and server-level
+        permissions."""
+        from .model import Principal
+        kinds = {"S": "SQL_USER", "U": "WINDOWS_USER", "G": "WINDOWS_GROUP"}
+        users = [Principal(name, kinds[str(typ).strip()], login=login) for name, typ, login in s.query(f"""
+            SELECT dp.name, dp.type, sp.name FROM {q(db)}.sys.database_principals dp
             JOIN sys.server_principals sp ON sp.sid = dp.sid
-            JOIN sys.sql_logins sl ON sl.principal_id = sp.principal_id
-            WHERE dp.type = 'S' AND sp.name NOT LIKE '##%' AND sp.name <> 'sa'""")
-        notes = []
-        for name, sid, phash, defdb, pol, exp, disabled in rows:
+            WHERE dp.type IN ('S', 'U', 'G') AND sp.name NOT LIKE '##%' AND sp.name <> 'sa'""")]
+        logins, errors = self._catalog(s).server_logins(users)
+        notes = list(errors)
+        for name, sql in logins:
             if t.scalar("SELECT SUSER_ID(?)", [name]) is not None:
                 continue
-            t.execute(f"CREATE LOGIN {q(name)} WITH PASSWORD = {phash} HASHED, SID = {sid}, "
-                      f"DEFAULT_DATABASE = [master], CHECK_POLICY = {'ON' if pol else 'OFF'}, "
-                      f"CHECK_EXPIRATION = {'ON' if exp else 'OFF'}")
-            if disabled:
-                t.execute(f"ALTER LOGIN {q(name)} DISABLE")
-            notes.append(f"created login {name} (same SID and password)")
+            t.execute(sql)
+            notes.append(f"created login {name} (same SID and password, roles and server permissions)")
         return notes
+
+    def reprovision_master_key(self, s, t, db: str, tdb: str) -> List[str]:
+        """A restored database's master key isn't encrypted by the target's service master key, so
+        certificates and keys in it can't be opened automatically. With the DMK password in
+        ``database_master_key_password_env``, open it and add the target's SMK encryption (the step
+        Microsoft documents for moving a database with encrypted data)."""
+        import os
+        has = s.query(f"""SELECT k.name, d.is_master_key_encrypted_by_server FROM {q(db)}.sys.symmetric_keys k
+                          CROSS JOIN sys.databases d WHERE d.name = ? AND k.name = '##MS_DatabaseMasterKey##'""", [db])
+        if not has or not has[0][1]:
+            return []
+        env = getattr(self.lift, "database_master_key_password_env", "SOURCE_DB_MASTER_KEY_PASSWORD")
+        pwd = os.environ.get(env)
+        if not pwd:
+            return [f"the database master key is encrypted by the source's service master key: set {env} to its "
+                    f"password, or run OPEN MASTER KEY DECRYPTION BY PASSWORD = '...'; ALTER MASTER KEY ADD "
+                    f"ENCRYPTION BY SERVICE MASTER KEY in {tdb}"]
+        t.execute(f"USE {q(tdb)}; OPEN MASTER KEY DECRYPTION BY PASSWORD = {lit(pwd)}; "
+                  "ALTER MASTER KEY ADD ENCRYPTION BY SERVICE MASTER KEY; CLOSE MASTER KEY; USE [master]")
+        return ["database master key re-encrypted by the target's service master key"]
 
     # -- TDE ---------------------------------------------------------------------
     def transfer_tde(self, db: str) -> None:

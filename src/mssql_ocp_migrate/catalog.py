@@ -171,7 +171,10 @@ class CatalogMixin:
             self._col(cv, "is_hidden", "c.is_hidden", "0"),
             "CASE WHEN c.xml_collection_id > 0 THEN SCHEMA_NAME(xsc.schema_id) END",
             "CASE WHEN c.xml_collection_id > 0 THEN xsc.name END",
-            "c.is_xml_document"])
+            "c.is_xml_document", self._col(cv, "is_filestream", "c.is_filestream", "0"), "c.is_rowguidcol",
+            "ISNULL(ic.is_not_for_replication, 0)", "c.is_ansi_padded",
+            self._col(cv, "vector_dimensions", "c.vector_dimensions"),
+            self._col(cv, "vector_base_type_desc", "c.vector_base_type_desc")])
 
     def _column_joins(self) -> str:
         joins = """
@@ -192,7 +195,8 @@ class CatalogMixin:
     def column_from_row(r) -> Column:
         (_oid, name, utype, is_udt, is_asm, uschema, stype, max_len, prec, scale, nullable, is_ident, seed,
          inc, is_comp, comp_def, persisted, coll, dname, ddef, sparse, colset, mask, enc_type, cek, enc_alg,
-         gen, hidden, xsch, xname, xdoc) = r
+         gen, hidden, xsch, xname, xdoc, *more) = r
+        fstream, rowguid, nfr, padded, vdims, vbase = (list(more) + [0, 0, 0, 1, None, None][len(more):])[:6]
         clr_udt = False
         if is_asm:                       # CLR: geography / geometry / hierarchyid / user-defined CLR types
             base, alias = utype, None
@@ -218,7 +222,10 @@ class CatalogMixin:
             encryption_key=cek, encryption_type=str(enc_type) if cek else None,
             encryption_algorithm=enc_alg if cek else None,
             generated_always=generated, is_hidden=_bool(hidden),
-            xml_schema=f"{xsch}.{xname}" if xname else None, xml_document=_bool(xdoc) and bool(xname))
+            xml_schema=f"{xsch}.{xname}" if xname else None, xml_document=_bool(xdoc) and bool(xname),
+            is_filestream=_bool(fstream), is_rowguidcol=_bool(rowguid), identity_not_for_replication=_bool(nfr),
+            ansi_padded=padded is None or _bool(padded), vector_dimensions=int(vdims or 0),
+            vector_base_type=str(vbase) if vbase else None)
 
     def _load_columns(self, tables: Dict[int, Table],
                       owner_join: str = "JOIN sys.tables t ON t.object_id = c.object_id AND t.is_ms_shipped = 0"
@@ -234,7 +241,15 @@ class CatalogMixin:
                 continue
             if r[26] and str(r[26]) not in ("NOT_APPLICABLE", "AS_ROW_START", "AS_ROW_END"):
                 t.warnings.append(f"column {r[1]} is generated ({r[26]}): copied as a normal column")
-            t.columns.append(self.column_from_row(r))
+            c = self.column_from_row(r)
+            if c.is_filestream:
+                t.warnings.append(f"column {c.name} is FILESTREAM, which SQL Server on Linux doesn't support: "
+                                  "created as varbinary(max) and its data copied into the database")
+            if not c.ansi_padded and c.type_name.lower() in ("char", "varchar", "binary", "varbinary") \
+                    and c.nullable:
+                t.warnings.append(f"column {c.name} was created with ANSI_PADDING OFF: existing values are "
+                                  "copied exactly, but new trailing blanks/zeros will be kept on the target")
+            t.columns.append(c)
 
     # ---------------------------------------------------------------------------------- indexes
     def _load_indexes(self, tables: Dict[int, Table],
@@ -249,7 +264,7 @@ class CatalogMixin:
                    i.fill_factor, i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
                    (SELECT TOP (1) p.data_compression_desc FROM sys.partitions p
                     WHERE p.object_id = i.object_id AND p.index_id = i.index_id ORDER BY p.partition_number),
-                   ps.name, {'hi.bucket_count' if hashed else 'NULL'}, ic.partition_ordinal
+                   ps.name, {'hi.bucket_count' if hashed else 'NULL'}, ic.partition_ordinal, i.is_disabled
             FROM sys.indexes i
             {owner_join}
             JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
@@ -261,7 +276,7 @@ class CatalogMixin:
             ORDER BY i.object_id, i.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id""")
         built: Dict[Tuple[int, int], Index] = {}
         for (oid, iid, name, type_desc, uniq, is_pk, is_uc, fdef, key_ord, desc, incl, col,
-             ff, padded, igdup, rowlk, pagelk, comp, scheme, buckets, part_ord) in rows:
+             ff, padded, igdup, rowlk, pagelk, comp, scheme, buckets, part_ord, disabled) in rows:
             t = tables.get(oid)
             if t is None:
                 continue
@@ -274,7 +289,8 @@ class CatalogMixin:
                            fill_factor=int(ff or 0), is_padded=bool(padded), ignore_dup_key=bool(igdup),
                            allow_row_locks=bool(rowlk), allow_page_locks=bool(pagelk),
                            data_compression=str(comp or "NONE"), partition_scheme=scheme,
-                           is_hash=type_desc == "NONCLUSTERED HASH", bucket_count=int(buckets or 0))
+                           is_hash=type_desc == "NONCLUSTERED HASH", bucket_count=int(buckets or 0),
+                           is_disabled=_bool(disabled))
                 built[(oid, iid)] = ix
                 if is_pk:
                     t.primary_key = ix
@@ -527,11 +543,12 @@ class CatalogMixin:
         skip = set(self._excluded_schemas())
         kinds = {"V": "VIEW", "P": "PROCEDURE", "FN": "FUNCTION", "IF": "FUNCTION", "TF": "FUNCTION",
                  "TR": "TRIGGER", "R": "RULE", "D": "DEFAULT"}
-        for otype, sch, name, definition, parent, disabled in self.query("""
-                SELECT o.type, SCHEMA_NAME(o.schema_id), o.name, m.definition,
+        order = self._trigger_order("sys.trigger_events", "te.is_first = 1 OR te.is_last = 1")
+        for oid, otype, sch, name, definition, parent, disabled, ansi, quoted in self.query("""
+                SELECT o.object_id, o.type, SCHEMA_NAME(o.schema_id), o.name, m.definition,
                        CASE WHEN o.parent_object_id > 0
                             THEN OBJECT_SCHEMA_NAME(o.parent_object_id) + '.' + OBJECT_NAME(o.parent_object_id) END,
-                       ISNULL(tr.is_disabled, 0)
+                       ISNULL(tr.is_disabled, 0), m.uses_ansi_nulls, m.uses_quoted_identifier
                 FROM sys.objects o
                 JOIN sys.sql_modules m ON m.object_id = o.object_id
                 LEFT JOIN sys.triggers tr ON tr.object_id = o.object_id
@@ -540,7 +557,10 @@ class CatalogMixin:
                 ORDER BY o.create_date"""):
             if sch in skip:
                 continue
-            out.append(ModuleDef(kinds[otype.strip()], sch, name, definition, parent, bool(disabled)))
+            meta: Dict[str, Any] = {"ansi_nulls": _bool(ansi), "quoted_identifier": _bool(quoted)}
+            if order.get(oid):
+                meta["trigger_order"] = order[oid]
+            out.append(ModuleDef(kinds[otype.strip()], sch, name, definition, parent, bool(disabled), meta))
         out += self._clr_modules()
         for sch, name, base in self.query(
                 "SELECT SCHEMA_NAME(schema_id), name, base_object_name FROM sys.synonyms"):
@@ -548,6 +568,14 @@ class CatalogMixin:
         out += self._service_broker()
         out += self._ddl_triggers()
         out += self._plan_guides()
+        return out
+
+    def _trigger_order(self, view: str, where: str) -> Dict[int, List[Tuple[str, str]]]:
+        """object_id -> [(FIRST|LAST, event)] set with sp_settriggerorder."""
+        out: Dict[int, List[Tuple[str, str]]] = {}
+        for oid, first, event in self.query(f"""
+                SELECT te.object_id, te.is_first, te.type_desc FROM {view} te WHERE {where}"""):
+            out.setdefault(oid, []).append(("FIRST" if _bool(first) else "LAST", str(event)))
         return out
 
     def _assemblies(self) -> List[ModuleDef]:
@@ -870,11 +898,18 @@ class CatalogMixin:
         return out
 
     def _ddl_triggers(self) -> List[ModuleDef]:
-        return [ModuleDef("DDL TRIGGER", "", name, definition, None, _bool(dis))
-                for name, definition, dis in self.query("""
-                    SELECT t.name, m.definition, t.is_disabled FROM sys.triggers t
-                    JOIN sys.sql_modules m ON m.object_id = t.object_id
-                    WHERE t.parent_class = 0 AND t.is_ms_shipped = 0""")]
+        out = []
+        rows = self.query("""
+                    SELECT t.object_id, t.name, m.definition, t.is_disabled, m.uses_ansi_nulls, m.uses_quoted_identifier
+                    FROM sys.triggers t JOIN sys.sql_modules m ON m.object_id = t.object_id
+                    WHERE t.parent_class = 0 AND t.is_ms_shipped = 0""")
+        order = self._trigger_order("sys.trigger_events", "te.is_first = 1 OR te.is_last = 1") if rows else {}
+        for oid, name, definition, dis, ansi, quoted in rows:
+            meta: Dict[str, Any] = {"ansi_nulls": _bool(ansi), "quoted_identifier": _bool(quoted)}
+            if order.get(oid):
+                meta["trigger_order"] = order[oid]
+            out.append(ModuleDef("DDL TRIGGER", "", name, definition, None, _bool(dis), meta))
+        return out
 
     def _plan_guides(self) -> List[ModuleDef]:
         out = []
@@ -915,6 +950,11 @@ class CatalogMixin:
         ex = DatabaseExtras()
         ex.settings = self._database_settings()
         ex.principals, ex.role_members, ex.schema_owners, ex.permissions = self._security()
+        ex.object_owners = [(s, n, o) for s, n, o in self.query("""
+            SELECT SCHEMA_NAME(o.schema_id), o.name, USER_NAME(o.principal_id) FROM sys.objects o
+            WHERE o.principal_id IS NOT NULL AND o.is_ms_shipped = 0 AND o.parent_object_id = 0
+              AND o.type IN ('U', 'V', 'P', 'FN', 'IF', 'TF', 'SN', 'SO', 'AF', 'PC', 'FS', 'FT', 'SQ')
+            ORDER BY 1, 2""") if s not in self._excluded_schemas()]
         ex.extended_properties = self._extended_properties()
         ex.security_policies = self._security_policies()
         ex.certificates, ex.signatures, ex.has_master_key = self._certificates(ex.warnings)
@@ -1243,13 +1283,15 @@ class CatalogMixin:
             rows = self.query("""
                 SELECT sp.type, CONVERT(varchar(514), sp.sid, 1),
                        CONVERT(varchar(514), CAST(LOGINPROPERTY(sp.name, 'PasswordHash') AS varbinary(256)), 1),
-                       sp.default_database_name, sl.is_policy_checked, sl.is_expiration_checked, sp.is_disabled
+                       sp.default_database_name, sl.is_policy_checked, sl.is_expiration_checked, sp.is_disabled,
+                       sp.default_language_name
                 FROM sys.server_principals sp LEFT JOIN sys.sql_logins sl ON sl.principal_id = sp.principal_id
                 WHERE sp.name = ?""", [name])
             if not rows:
                 errors.append(f"login {name} not visible on the source (needs VIEW ANY DEFINITION)")
                 continue
-            ptype, sid, phash, defdb, pol, exp, disabled = rows[0]
+            ptype, sid, phash, defdb, pol, exp, disabled, *rest = rows[0]
+            lang = rest[0] if rest else None
             ptype = str(ptype).strip()
             if ptype == "S":
                 if not phash:
@@ -1260,19 +1302,102 @@ class CatalogMixin:
                        f"CHECK_EXPIRATION = {'ON' if _bool(exp) else 'OFF'}")
             else:
                 sql = f"CREATE LOGIN {q(name)} FROM WINDOWS"
+            if lang and str(lang).lower() != "us_english":
+                # the login's language sets date formats (DATEFORMAT dmy for British, ...) and messages
+                sql += f";\nALTER LOGIN {q(name)} WITH DEFAULT_LANGUAGE = {q(lang)}"
             if _bool(disabled):
                 sql += f";\nALTER LOGIN {q(name)} DISABLE"
-            for (role,) in self.query("""
-                    SELECT r.name FROM sys.server_role_members m
+            roles = self.query("""
+                    SELECT r.name, r.is_fixed_role FROM sys.server_role_members m
                     JOIN sys.server_principals r ON r.principal_id = m.role_principal_id
-                    JOIN sys.server_principals l ON l.principal_id = m.member_principal_id WHERE l.name = ?""", [name]):
+                    JOIN sys.server_principals l ON l.principal_id = m.member_principal_id WHERE l.name = ?""", [name])
+            for role, fixed in roles:
+                if not _bool(fixed):          # a user-defined server role, with its own permissions
+                    sql += (f";\nIF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = {lit(role)} AND type = 'R') "
+                            f"CREATE SERVER ROLE {q(role)}")
+                    sql += "".join(";\n" + p for p in self.server_permissions(role))
                 sql += f";\nALTER SERVER ROLE {q(role)} ADD MEMBER {q(name)}"
+            sql += "".join(";\n" + p for p in self.server_permissions(name))
             out.append((name, sql))
         return out, errors
 
-    def agent_jobs(self, database: str, target_database: str) -> List[Tuple[str, List[str], List[str]]]:
+    def server_permissions(self, grantee: str) -> List[str]:
+        """GRANT/DENY at server scope (VIEW SERVER STATE, IMPERSONATE ON LOGIN::x, ...) for a login
+        or server role; CONNECT SQL is implied by CREATE LOGIN."""
+        out = []
+        for state, perm, cls, target in self.query("""
+                SELECT p.state_desc, p.permission_name, p.class,
+                       CASE p.class WHEN 101 THEN SUSER_NAME(p.major_id)
+                                    WHEN 105 THEN (SELECT e.name FROM sys.endpoints e WHERE e.endpoint_id = p.major_id) END
+                FROM sys.server_permissions p
+                JOIN sys.server_principals g ON g.principal_id = p.grantee_principal_id
+                WHERE g.name = ? AND p.permission_name <> 'CONNECT SQL' AND p.class IN (100, 101, 105)""", [grantee]):
+            on = "" if int(cls) == 100 else (f" ON LOGIN::{q(target)}" if int(cls) == 101 else f" ON ENDPOINT::{q(target)}")
+            if int(cls) != 100 and not target:
+                continue
+            verb = "GRANT" if str(state).startswith("GRANT") else str(state)
+            out.append(f"{verb} {perm}{on} TO {q(grantee)}" + (" WITH GRANT OPTION" if state == "GRANT_WITH_GRANT_OPTION"
+                                                                else ""))
+        return out
+
+    def unresolved_references(self) -> set:
+        """(referencing object, schema.object) for references in code that don't resolve to an
+        object in this database (deferred name resolution lets such code be created; it fails when
+        it runs). Cross-database, cross-server and caller-dependent references are left out."""
+        return {(a, b) for a, b in self.query("""
+            SELECT OBJECT_SCHEMA_NAME(d.referencing_id) + '.' + OBJECT_NAME(d.referencing_id),
+                   ISNULL(d.referenced_schema_name, N'dbo') + '.' + d.referenced_entity_name
+            FROM sys.sql_expression_dependencies d
+            WHERE d.referenced_class = 1 AND d.referenced_id IS NULL AND d.is_ambiguous = 0
+              AND d.is_caller_dependent = 0 AND d.referenced_database_name IS NULL
+              AND d.referenced_server_name IS NULL AND d.referenced_entity_name NOT LIKE '#%'
+              AND OBJECT_ID(QUOTENAME(ISNULL(d.referenced_schema_name, N'dbo')) + '.'
+                            + QUOTENAME(d.referenced_entity_name)) IS NULL""") if a}
+
+    def server_triggers(self) -> List[Tuple[str, str, bool]]:
+        """(name, definition, disabled) of server-level DDL and logon triggers."""
+        return [(n, d, _bool(dis)) for n, d, dis in self.query("""
+            SELECT t.name, m.definition, t.is_disabled FROM sys.server_triggers t
+            JOIN sys.server_sql_modules m ON m.object_id = t.object_id WHERE t.is_ms_shipped = 0""")]
+
+    def configuration(self) -> Dict[str, int]:
+        return {str(n): int(v) for n, v in self.query(
+            "SELECT name, CAST(value_in_use AS int) FROM sys.configurations")}
+
+    def is_linux(self) -> bool:
+        try:
+            return str(self.query("SELECT host_platform FROM sys.dm_os_host_info")[0][0]).lower() == "linux"
+        except Exception:
+            return False
+
+    def custom_messages(self) -> List[Tuple[int, List[Tuple[str, str]]]]:
+        """User-defined messages (sp_addmessage) the database's code raises by number:
+        [(message_id, [(language, EXEC sp_addmessage ...)])], us_english first as SQL Server requires."""
+        numbers = set()
+        for (definition,) in self.query("SELECT definition FROM sys.sql_modules WHERE definition IS NOT NULL"):
+            for n in re.findall(r"(?:RAISERROR\s*\(|FORMATMESSAGE\s*\()\s*(\d{5,})", definition or "", re.I):
+                if int(n) >= 50001:
+                    numbers.add(int(n))
+        if not numbers:
+            return []
+        out: Dict[int, List[Tuple[int, str, str]]] = {}
+        for mid, lang_id, lang, sev, logged, text in self.query(f"""
+                SELECT m.message_id, m.language_id, l.name, m.severity, m.is_event_logged, m.text
+                FROM sys.messages m JOIN sys.syslanguages l ON l.msglangid = m.language_id
+                WHERE m.message_id IN ({', '.join(str(n) for n in sorted(numbers))})"""):
+            stmt = (f"EXEC sys.sp_addmessage @msgnum = {int(mid)}, @severity = {int(sev)}, @msgtext = {lit(text)}, "
+                    f"@lang = {lit(lang)}, @with_log = {'TRUE' if _bool(logged) else 'FALSE'}")
+            out.setdefault(int(mid), []).append((int(lang_id), str(lang), stmt))
+        return [(mid, [(lang, stmt) for lid, lang, stmt in sorted(v, key=lambda x: x[0] != 1033)])
+                for mid, v in sorted(out.items())]
+
+    def agent_jobs(self, database: str, target_database: str,
+                   linux_target: bool = False) -> List[Tuple[str, List[str], List[str]]]:
         """(job, msdb statements, warnings) for SQL Agent jobs with a step in ``database``. Jobs are
-        created disabled, so they don't run twice before cut-over."""
+        created disabled, so they don't run twice before cut-over. The operator a job notifies is
+        created too. With a Linux target, jobs with steps SQL Agent on Linux can't run (CmdExec,
+        PowerShell, SSIS, ...) are reported and skipped (no statements)."""
+        from .assess import LINUX_UNSUPPORTED_SUBSYSTEMS
         jobs = self.query("""
             SELECT j.job_id, j.name, j.description, c.name, SUSER_SNAME(j.owner_sid), j.start_step_id,
                    j.notify_level_email, j.notify_email_operator_id
@@ -1288,14 +1413,32 @@ class CatalogMixin:
                      f"EXEC msdb.dbo.sp_add_job @job_name = {lit(name)}, @enabled = 0, "
                      f"@description = {lit(desc or '')}, @category_name = {lit(cat)}"
                      + (f", @owner_login_name = {lit(owner)}" if owner else "")]
+            notify_stmt = None
             if operator:
-                warn.append(f"job {name}: e-mail notifications to operators are not copied")
-            for (sid, sname, sub, cmd, db, dbuser, ok_act, ok_step, fail_act, fail_step, retries, interval,
-                 outfile, flags, proxy) in self.query("""
+                ops = self.query("""SELECT name, enabled, email_address, pager_address FROM msdb.dbo.sysoperators
+                                    WHERE id = ?""", [operator])
+                if ops:
+                    oname, oen, email, pager = ops[0]
+                    stmts.insert(0, f"IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysoperators WHERE name = {lit(oname)}) "
+                                    f"EXEC msdb.dbo.sp_add_operator @name = {lit(oname)}, @enabled = {int(oen or 0)}"
+                                    + (f", @email_address = {lit(email)}" if email else "")
+                                    + (f", @pager_address = {lit(pager)}" if pager else ""))
+                    notify_stmt = (f"EXEC msdb.dbo.sp_update_job @job_name = {lit(name)}, "
+                                   f"@notify_level_email = {int(notify or 0)}, @notify_email_operator_name = {lit(oname)}")
+                    warn.append(f"job {name}: notifies operator {oname} by e-mail, which needs Database Mail and the "
+                                "Agent mail profile configured on the target")
+            steps = self.query("""
                     SELECT step_id, step_name, subsystem, command, database_name, database_user_name,
                            on_success_action, on_success_step_id, on_fail_action, on_fail_step_id, retry_attempts,
                            retry_interval, output_file_name, flags, proxy_id
-                    FROM msdb.dbo.sysjobsteps WHERE job_id = ? ORDER BY step_id""", [job_id]):
+                    FROM msdb.dbo.sysjobsteps WHERE job_id = ? ORDER BY step_id""", [job_id])
+            bad = sorted({str(s[2]) for s in steps if str(s[2]).upper() in LINUX_UNSUPPORTED_SUBSYSTEMS})
+            if linux_target and bad:
+                out.append((name, [], [f"job {name} not copied: it has {', '.join(bad)} steps, which SQL Server "
+                                       "Agent on Linux can't run; rewrite them in T-SQL or as an OpenShift CronJob"]))
+                continue
+            for (sid, sname, sub, cmd, db, dbuser, ok_act, ok_step, fail_act, fail_step, retries, interval,
+                 outfile, flags, proxy) in steps:
                 dbn = target_database if db == database else db
                 if proxy:
                     warn.append(f"job {name} step {sid}: runs under a proxy, which is not copied")
@@ -1309,6 +1452,8 @@ class CatalogMixin:
                     f"@retry_attempts = {int(retries)}, @retry_interval = {int(interval)}, @flags = {int(flags)}"
                     + (f", @output_file_name = {lit(outfile)}" if outfile else ""))
             stmts.append(f"EXEC msdb.dbo.sp_update_job @job_name = {lit(name)}, @start_step_id = {int(start)}")
+            if notify_stmt:
+                stmts.append(notify_stmt)
             for row in self.query("""
                     SELECT s.name, s.enabled, s.freq_type, s.freq_interval, s.freq_subday_type, s.freq_subday_interval,
                            s.freq_relative_interval, s.freq_recurrence_factor, s.active_start_date, s.active_end_date,

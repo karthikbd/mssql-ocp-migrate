@@ -41,6 +41,12 @@ class Column:
     is_hidden: bool = False
     xml_schema: Optional[str] = None  # typed xml: "schema.collection"
     xml_document: bool = False        # typed xml DOCUMENT (else CONTENT)
+    is_filestream: bool = False       # FILESTREAM on the source (Linux has none: plain varbinary(max))
+    is_rowguidcol: bool = False
+    identity_not_for_replication: bool = False
+    ansi_padded: bool = True          # created under SET ANSI_PADDING OFF when False
+    vector_dimensions: int = 0        # SQL Server 2025 vector(n[, float16])
+    vector_base_type: Optional[str] = None
 
     @property
     def insertable(self) -> bool:
@@ -85,6 +91,7 @@ class Index:
     partition_column: Optional[str] = None
     is_hash: bool = False                   # memory-optimized HASH index
     bucket_count: int = 0
+    is_disabled: bool = False               # ALTER INDEX ... DISABLE (no data, not maintained)
 
     def options(self) -> dict:
         """The storage/behaviour options that must survive a migration (fill factor 100 == 0)."""
@@ -93,7 +100,8 @@ class Index:
                 "allow_row_locks": self.allow_row_locks, "allow_page_locks": self.allow_page_locks,
                 "data_compression": self.data_compression,
                 "partition_compression": dict(sorted(self.partition_compression.items())),
-                "partition_scheme": self.partition_scheme, "hash_bucket_count": self.bucket_count}
+                "partition_scheme": self.partition_scheme, "hash_bucket_count": self.bucket_count,
+                "disabled": self.is_disabled}
 
 
 @dataclass
@@ -373,6 +381,7 @@ class DatabaseExtras:
     principals: List[Principal] = field(default_factory=list)
     role_members: List[Tuple[str, str]] = field(default_factory=list)   # (role, member)
     schema_owners: Dict[str, str] = field(default_factory=dict)         # schema -> owner
+    object_owners: List[Tuple[str, str, str]] = field(default_factory=list)   # (schema, object, owner)
     permissions: List[Permission] = field(default_factory=list)
     extended_properties: List[ExtendedProperty] = field(default_factory=list)
     security_policies: List[SecurityPolicy] = field(default_factory=list)

@@ -168,6 +168,7 @@ def settings_row(owner="app_login"):
 
 EXTRAS_ANSWERS = [
     ("SELECT is_cdc_enabled FROM sys.databases", [(0,)]),
+    ("USER_NAME(o.principal_id) FROM sys.objects o", [("sales", "usp_Owned", "app"), ("cdc", "x", "app")]),
     ("SELECT compatibility_level, is_read_committed_snapshot_on", settings_row()),
     ("sys.database_scoped_configurations", [("MAXDOP", "4"), ("LEGACY_CARDINALITY_ESTIMATION", "0")]),
     ("sys.change_tracking_databases", [(2, "DAYS", 1)]),
@@ -221,6 +222,7 @@ EXTRAS_ANSWERS = [
 def test_database_extras_maps_everything():
     s = fake_server(EXTRAS_ANSWERS)
     ex = s.database_extras()
+    assert ("sales", "usp_Owned", "app") in ex.object_owners
     st = ex.settings
     assert (st.compatibility_level, st.read_committed_snapshot, st.snapshot_isolation, st.owner) == \
         (150, True, True, "app_login")
@@ -267,11 +269,11 @@ def test_database_extras_maps_everything():
 def test_index_and_statistics_catalog_parsing():
     s = fake_server([
         ("FROM sys.indexes i\n            JOIN sys.tables", [
-            (1, 1, "PK_T", "CLUSTERED", 1, 1, 0, None, 1, 0, 0, "Id", 90, 1, 0, 1, 1, "PAGE", "ps_year", None, 0),
-            (1, 1, "PK_T", "CLUSTERED", 1, 1, 0, None, 0, 0, 0, "Year", 90, 1, 0, 1, 1, "PAGE", "ps_year", None, 1),
-            (1, 2, "IX_T", "NONCLUSTERED", 0, 0, 0, "([S]>(0))", 1, 1, 0, "S", 0, 0, 1, 0, 1, "NONE", None, None, 0),
-            (1, 2, "IX_T", "NONCLUSTERED", 0, 0, 0, "([S]>(0))", 0, 0, 1, "Id", 0, 0, 1, 0, 1, "NONE", None, None, 0),
-            (3, 1, "PK_M", "NONCLUSTERED HASH", 1, 1, 0, None, 1, 0, 0, "Id", 0, 0, 0, 1, 1, "NONE", None, 1024, 0)]),
+            (1, 1, "PK_T", "CLUSTERED", 1, 1, 0, None, 1, 0, 0, "Id", 90, 1, 0, 1, 1, "PAGE", "ps_year", None, 0, 0),
+            (1, 1, "PK_T", "CLUSTERED", 1, 1, 0, None, 0, 0, 0, "Year", 90, 1, 0, 1, 1, "PAGE", "ps_year", None, 1, 0),
+            (1, 2, "IX_T", "NONCLUSTERED", 0, 0, 0, "([S]>(0))", 1, 1, 0, "S", 0, 0, 1, 0, 1, "NONE", None, None, 0, 0),
+            (1, 2, "IX_T", "NONCLUSTERED", 0, 0, 0, "([S]>(0))", 0, 0, 1, "Id", 0, 0, 1, 0, 1, "NONE", None, None, 0, 0),
+            (3, 1, "PK_M", "NONCLUSTERED HASH", 1, 1, 0, None, 1, 0, 0, "Id", 0, 0, 0, 1, 1, "NONE", None, 1024, 0, 0)]),
         ("HAVING COUNT(DISTINCT p2.data_compression) > 1", [(1, 1, 1, "PAGE"), (1, 1, 2, "ROW"), (2, 0, 1, "ROW"),
                                                          (2, 0, 2, "NONE")]),
         ("FROM sys.indexes i LEFT JOIN sys.partition_schemes", [(2, "ROW", "ps_heap", "Year")]),

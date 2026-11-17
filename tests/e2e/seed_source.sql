@@ -306,3 +306,67 @@ IF NOT EXISTS (SELECT 1 FROM sys.servers WHERE name = N'E2E_LOOP')
     EXEC master.dbo.sp_addlinkedserver @server = N'E2E_LOOP', @srvproduct = N'SQL Server';
 EXEC master.dbo.sp_serveroption N'E2E_LOOP', N'rpc out', N'true';
 GO
+-- 0.4.0: gaps found against other migration tools ---------------------------------------------
+SET ANSI_NULLS OFF;
+GO
+SET QUOTED_IDENTIFIER OFF;
+GO
+CREATE PROCEDURE dbo.usp_Legacy AS
+    SELECT "legacy" AS msg, CASE WHEN NULL = NULL THEN 1 ELSE 0 END AS null_equals_null;
+GO
+SET ANSI_NULLS ON;
+GO
+SET QUOTED_IDENTIFIER ON;
+GO
+CREATE TRIGGER sales.trg_Customer_First ON sales.Customer AFTER INSERT AS SET NOCOUNT ON;
+GO
+EXEC sys.sp_settriggerorder @triggername = N'sales.trg_Customer_First', @order = N'First', @stmttype = N'INSERT';
+GO
+ALTER AUTHORIZATION ON OBJECT::dbo.usp_Count TO etl_svc;
+GO
+CREATE INDEX IX_Order_Status_Off ON sales.[Order](Status, OrderDate);
+ALTER INDEX IX_Order_Status_Off ON sales.[Order] DISABLE;
+GO
+CREATE TABLE dbo.Variant (Id int NOT NULL PRIMARY KEY, V sql_variant NULL);
+INSERT dbo.Variant VALUES
+    (1, CAST(42 AS int)), (2, CAST(42 AS bigint)), (3, CAST(42 AS tinyint)), (4, CAST(3.14159 AS decimal(9, 5))),
+    (5, CAST(1.0E-300 AS float)), (6, CAST(2.5 AS real)), (7, CAST(12.3456 AS money)), (8, CAST(1 AS bit)),
+    (9, CAST('2024-02-29T23:59:59.9999999' AS datetime2(7))), (10, CAST('2024-02-29T23:59:59.997' AS datetime)),
+    (11, CAST('2024-02-29' AS date)), (12, CAST('23:59:59.1234567' AS time(7))),
+    (13, CAST('2024-02-29T23:59:59.1234567+05:30' AS datetimeoffset(7))), (14, CAST(N'Ünïcødé 漢字' AS nvarchar(20))),
+    (15, CAST('ascii' COLLATE Latin1_General_CS_AS AS varchar(10))), (16, CAST(0x00FF10 AS varbinary(8))),
+    (17, CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier)), (18, CAST(N'it''s|piped' AS nvarchar(30))),
+    (19, NULL), (20, CAST('2024-02-29T10:00:00' AS smalldatetime));
+GO
+CREATE TABLE dbo.Legacy (
+    Id      int IDENTITY(1, 1) NOT FOR REPLICATION NOT NULL PRIMARY KEY,
+    RowGuid uniqueidentifier ROWGUIDCOL NOT NULL CONSTRAINT DF_Legacy_RowGuid DEFAULT NEWSEQUENTIALID(),
+    Utf8    varchar(60) COLLATE Latin1_General_100_CI_AS_SC_UTF8 NULL,
+    Notes   text NULL,
+    UNotes  ntext NULL,
+    Blob    image NULL
+);
+INSERT dbo.Legacy (Utf8, Notes, UNotes, Blob) VALUES
+    (N'Grüße 漢字 😀', 'old text', N'old ntext Ü', 0x0102030405),
+    (NULL, NULL, NULL, NULL),
+    (N'plain', REPLICATE(CAST('x' AS varchar(max)), 9000), REPLICATE(CAST(N'ü' AS nvarchar(max)), 5000), 0x00);
+GO
+IF EXISTS (SELECT 1 FROM sys.messages WHERE message_id = 50010) EXEC sys.sp_dropmessage 50010;
+EXEC sys.sp_addmessage @msgnum = 50010, @severity = 16, @msgtext = N'Order %d is on hold', @lang = 'us_english';
+GO
+CREATE PROCEDURE sales.usp_Hold @OrderId int AS RAISERROR(50010, 16, 1, @OrderId);
+GO
+ALTER LOGIN e2e_app WITH DEFAULT_LANGUAGE = British;
+GO
+IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'e2e_monitor') CREATE SERVER ROLE e2e_monitor;
+GO
+GRANT VIEW SERVER STATE TO e2e_monitor;
+ALTER SERVER ROLE e2e_monitor ADD MEMBER e2e_app;
+GRANT VIEW ANY DATABASE TO e2e_app;
+GO
+IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysoperators WHERE name = N'e2e dba')
+    EXEC msdb.dbo.sp_add_operator @name = N'e2e dba', @enabled = 1, @email_address = N'dba@example.com';
+EXEC msdb.dbo.sp_update_job @job_name = N'e2e nightly', @notify_level_email = 2, @notify_email_operator_name = N'e2e dba';
+GO
+CREATE PROCEDURE dbo.usp_CrossDb AS SELECT COUNT(*) FROM e2e_archive.dbo.Orders;
+GO

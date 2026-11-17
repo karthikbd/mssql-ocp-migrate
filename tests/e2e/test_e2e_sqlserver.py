@@ -50,11 +50,29 @@ def run_script(side: str, path: Path) -> None:
         c.close()
 
 
+def source_major() -> int:
+    c = connect(conn_cfg("source", "master"))
+    try:
+        return int(c.scalar("SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int)"))
+    finally:
+        c.close()
+
+
+def target_major() -> int:
+    c = connect(conn_cfg("target", "master"))
+    try:
+        return int(c.scalar("SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int)"))
+    finally:
+        c.close()
+
+
 @pytest.fixture(scope="module")
 def migrated(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("e2e")
     t0 = time.monotonic()
     run_script("source", HERE / "seed_source.sql")
+    if source_major() >= 17:
+        run_script("source", HERE / "seed_2025.sql")
     print(f"seeded source in {time.monotonic() - t0:.0f}s", flush=True)
     c = connect(conn_cfg("target", "master"), autocommit=True)
     c.execute("IF DB_ID('e2e_tgt') IS NOT NULL BEGIN ALTER DATABASE e2e_tgt SET SINGLE_USER WITH ROLLBACK "
@@ -64,6 +82,7 @@ def migrated(tmp_path_factory):
     cfg = Config(source=conn_cfg("source", "e2e_src"), target=conn_cfg("target", "e2e_tgt"))
     cfg.migration.workers = int(E("E2E_WORKERS", "6"))
     cfg.migration.copy_agent_jobs = True
+    cfg.migration.sync_enable_change_tracking = True       # record a baseline so test_sync can catch up
     cfg.migration.copy_linked_servers = True
     os.environ.setdefault("TARGET_DB_MASTER_KEY_PASSWORD", "E2e!TargetMasterKey1")
     cfg.migration.chunk_rows = 50_000
@@ -307,6 +326,85 @@ def test_login_job_and_linked_server(migrated):
         [("E2E_LOOP", True)]
 
 
+def test_module_settings_trigger_order_owners_and_disabled_indexes(migrated):
+    for q in ["SELECT m.uses_ansi_nulls, m.uses_quoted_identifier FROM sys.sql_modules m "
+              "WHERE m.object_id = OBJECT_ID('dbo.usp_Legacy')",
+              "SELECT OBJECT_NAME(te.object_id), te.type_desc, te.is_first, te.is_last FROM sys.trigger_events te "
+              "WHERE te.object_id = OBJECT_ID('sales.trg_Customer_First')",
+              "SELECT USER_NAME(principal_id) FROM sys.objects WHERE object_id = OBJECT_ID('dbo.usp_Count')",
+              "SELECT name, is_disabled FROM sys.indexes WHERE name = 'IX_Order_Status_Off'"]:
+        a, b = both(migrated, q)
+        assert rows(a) == rows(b) and a, q
+    assert rows(both(migrated, "SELECT uses_ansi_nulls FROM sys.sql_modules WHERE object_id = "
+                               "OBJECT_ID('dbo.usp_Legacy')")[1]) == [(False,)]
+    a, b = both(migrated, "EXEC dbo.usp_Legacy")            # ANSI_NULLS OFF: NULL = NULL is true
+    assert rows(a) == rows(b) == [("legacy", 1)]
+    assert rows(both(migrated, "SELECT is_disabled FROM sys.indexes WHERE name = 'IX_Order_Status_Off'")[1]) == [(True,)]
+
+
+def test_sql_variant_keeps_base_types(migrated):
+    q = """SELECT Id, CAST(SQL_VARIANT_PROPERTY(V, 'BaseType') AS nvarchar(30)),
+                  CAST(SQL_VARIANT_PROPERTY(V, 'Precision') AS int), CAST(SQL_VARIANT_PROPERTY(V, 'Scale') AS int),
+                  CAST(SQL_VARIANT_PROPERTY(V, 'MaxLength') AS int),
+                  CAST(SQL_VARIANT_PROPERTY(V, 'Collation') AS nvarchar(128)),
+                  CONVERT(varchar(max), CAST(V AS varbinary(8000)), 1)
+           FROM dbo.Variant ORDER BY Id"""
+    a, b = both(migrated, q)
+    assert rows(a) == rows(b) and len(a) == 20
+    assert rows(a)[1][1] == "bigint" and rows(a)[8][1] == "datetime2"
+
+
+def test_rowguidcol_not_for_replication_utf8_and_legacy_types(migrated):
+    a, b = both(migrated, """SELECT c.name, c.is_rowguidcol, ic.is_not_for_replication, c.collation_name
+                             FROM sys.columns c LEFT JOIN sys.identity_columns ic
+                               ON ic.object_id = c.object_id AND ic.column_id = c.column_id
+                             WHERE c.object_id = OBJECT_ID('dbo.Legacy') ORDER BY c.column_id""")
+    assert rows(a) == rows(b) and len(a) == 6
+    a, b = both(migrated, """SELECT Id, CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(Utf8 AS varbinary(max))), 2),
+                                    CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(CAST(Notes AS varchar(max)) AS varbinary(max))), 2),
+                                    CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(CAST(UNotes AS nvarchar(max)) AS varbinary(max))), 2),
+                                    CONVERT(varchar(64), HASHBYTES('SHA2_256', CAST(Blob AS varbinary(max))), 2), RowGuid
+                             FROM dbo.Legacy ORDER BY Id""")
+    assert rows(a) == rows(b) and len(a) == 3
+
+
+def test_server_objects_messages_language_roles_operator(migrated):
+    _, _, src, tgt = migrated
+    assert tgt.query("SELECT text FROM sys.messages WHERE message_id = 50010 AND language_id = 1033")[0][0] == \
+        "Order %d is on hold"
+    assert tgt.query("SELECT default_language_name FROM sys.server_principals WHERE name = 'e2e_app'")[0][0] == "British"
+    assert tgt.query("""SELECT COUNT(*) FROM sys.server_role_members m
+                        JOIN sys.server_principals r ON r.principal_id = m.role_principal_id
+                        JOIN sys.server_principals l ON l.principal_id = m.member_principal_id
+                        WHERE r.name = 'e2e_monitor' AND l.name = 'e2e_app'""")[0][0] == 1
+    perms = rows(tgt.query("""SELECT g.name, p.permission_name FROM sys.server_permissions p
+                              JOIN sys.server_principals g ON g.principal_id = p.grantee_principal_id
+                              WHERE g.name IN ('e2e_monitor', 'e2e_app') AND p.permission_name <> 'CONNECT SQL'
+                              ORDER BY 1, 2"""))
+    assert perms == [("e2e_app", "VIEW ANY DATABASE"), ("e2e_monitor", "VIEW SERVER STATE")]
+    assert rows(tgt.query("""SELECT o.name, j.notify_level_email FROM msdb.dbo.sysjobs j
+                             JOIN msdb.dbo.sysoperators o ON o.id = j.notify_email_operator_id
+                             WHERE j.name = N'e2e nightly'""")) == [("e2e dba", 2)]
+
+
+def test_assessment_ran_and_found_the_cross_database_reference(migrated):
+    _, run, _, _ = migrated
+    assert run.assessment is not None
+    items = {(f.area, f.item) for f in run.assessment.findings}
+    assert ("Code", "dbo.usp_CrossDb") in items
+    assert ("Server", "user-defined messages") in items
+
+
+@pytest.mark.skipif(os.environ.get("MSSQL_E2E") != "1" or source_major() < 17 or target_major() < 17,
+                    reason="SQL Server 2025 on both sides")
+def test_json_and_vector(migrated):
+    a, b = both(migrated, "SELECT Id, CAST(Doc AS nvarchar(max)), CAST(Vec AS nvarchar(max)) FROM dbo.Embedding ORDER BY Id")
+    assert rows(a) == rows(b) and len(a) == 3
+    a, b = both(migrated, "SELECT c.name, TYPE_NAME(c.system_type_id), c.vector_dimensions FROM sys.columns c "
+                          "WHERE c.object_id = OBJECT_ID('dbo.Embedding') ORDER BY c.column_id")
+    assert rows(a) == rows(b)
+
+
 def test_validation_detects_tampering(migrated):
     cfg, _, _, tgt = migrated
     tgt.execute("UPDATE sales.OrderLine SET Qty = Qty + 1 WHERE OrderId = 5 AND [LineNo] = 2")
@@ -323,3 +421,29 @@ def _write_cfg(cfg) -> str:
     d = cfg.to_dict(redact=False)
     p.write_text(json.dumps(d))
     return str(p)
+
+
+def test_sync_catches_up_with_changes_made_after_the_copy(migrated):
+    """Online cut-over: change the source after migrate, sync, then a final sync and validation."""
+    cfg, _, src, tgt = migrated
+    from mssql_ocp_migrate.sync import Syncer
+    src.execute("INSERT sales.Customer (Code, Name) VALUES ('SYNC0001', N'after the copy')")
+    src.execute("UPDATE sales.Customer SET Name = N'renamed' WHERE CustomerId = 100")
+    src.execute("DELETE FROM sales.OrderLine WHERE OrderId = 7")
+    src.execute("UPDATE sales.OrderLine SET Qty = Qty + 10 WHERE OrderId = 9")
+    src.execute("INSERT dbo.Variant VALUES (21, CAST(7 AS smallint))")
+    res = Syncer(cfg, progress=print).run()
+    assert res.rows >= 5 and not [t for t in res.tables if "OrderLine" in t and res.tables[t]["upserted"] == 0]
+    for q in ["SELECT CustomerId, Code, Name FROM sales.Customer WHERE Code = 'SYNC0001' OR CustomerId = 100 ORDER BY 1",
+              "SELECT COUNT(*), SUM(CAST(Qty AS bigint)) FROM sales.OrderLine WHERE OrderId IN (7, 9)",
+              "SELECT Id, CAST(SQL_VARIANT_PROPERTY(V, 'BaseType') AS nvarchar(30)) FROM dbo.Variant WHERE Id = 21"]:
+        assert rows(src.query(q)) == rows(tgt.query(q)), q
+    assert tgt.query("SELECT COUNT(*) FROM sys.foreign_keys WHERE is_disabled = 1")[0][0] == 0
+    src.execute("DELETE FROM sales.Customer WHERE Code = 'SYNC0001'")
+    final = Syncer(cfg, progress=print).run(final=True)
+    assert final.from_version == res.to_version
+    assert tgt.query("SELECT COUNT(*) FROM sys.foreign_keys WHERE is_not_trusted = 1 AND is_disabled = 0 "
+                     "AND name NOT IN (SELECT name FROM sys.foreign_keys WHERE 1 = 0)")[0][0] == \
+        src.query("SELECT COUNT(*) FROM sys.foreign_keys WHERE is_not_trusted = 1 AND is_disabled = 0")[0][0]
+    from mssql_ocp_migrate.cli import main
+    assert main(["validate", "-c", _write_cfg(cfg)]) == 0

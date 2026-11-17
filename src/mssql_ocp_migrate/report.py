@@ -124,6 +124,12 @@ generated {_e(_dt.datetime.now().isoformat(timespec='seconds'))}</div>
         parts.append("<h2>DDL errors</h2><table><tr><th>Object</th><th>Error</th></tr>" +
                      "".join(f"<tr><td>{_e(d['object'])}</td><td>{_e(d['error'])}</td></tr>"
                              for d in run.ddl_errors) + "</table>")
+    if run is not None and getattr(run, "assessment", None) is not None and run.assessment.findings:
+        parts.append("<h2>Readiness assessment</h2><table><tr><th>Severity</th><th>Area</th><th>Item</th>"
+                     "<th>Finding</th><th>What to do</th></tr>" +
+                     "".join(f"<tr><td class={'bad' if f.severity == 'blocker' else ''}>{_e(f.severity)}</td>"
+                             f"<td>{_e(f.area)}</td><td>{_e(f.item)}</td><td>{_e(f.message)}</td><td>{_e(f.fix)}</td></tr>"
+                             for f in run.assessment.findings) + "</table>")
     if run is not None and run.warnings:
         parts.append("<h2>Warnings</h2><ul>" + "".join(f"<li>{_e(w)}</li>" for w in run.warnings) + "</ul>")
     if est is not None:

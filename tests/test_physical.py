@@ -245,6 +245,22 @@ class FakeConn:
             return [(1,)]
         if "sys.sql_logins" in sql or "authentication_type = 1" in sql:
             return []
+        if "dp.type IN ('S', 'U', 'G')" in sql:                     # users of the lifted database
+            return [("app", "S", "app_login")]
+        if "WHERE sp.name = ?" in sql:                              # the login, scripted with its SID and hash
+            return [("S", "0x01", "0x0200AB", "master", 1, 0, 0, "us_english")]
+        if "sys.server_role_members" in sql or "FROM sys.server_permissions p" in sql:
+            return []
+        if "is_master_key_encrypted_by_server" in sql:
+            return [("##MS_DatabaseMasterKey##", 1)] if getattr(w, "dmk", False) else []
+        if "FROM sys.sql_modules WHERE definition" in sql:
+            return [("RAISERROR(50001, 16, 1)",)]
+        if "FROM sys.messages m" in sql:
+            return [(50001, 1033, "us_english", 16, 0, "Order %d failed")]
+        if "FROM sys.messages WHERE message_id" in sql:
+            return [(0,)]
+        if "host_platform" in sql:
+            return [("Linux",)]
         raise AssertionError(f"unexpected query: {sql[:120]}")
 
     def scalar(self, sql, params=None):
@@ -335,6 +351,9 @@ def test_newer_target_version_warns_and_statistics_refresh_runs(tmp_path):
     lift.cutover("Sales")
     assert "EXEC [Sales].sys.sp_updatestats" in w.target_log
     assert "statistics updated (sp_updatestats)" in lift.state.db("Sales")["post_notes"]
+    notes = lift.state.db("Sales")["post_notes"]
+    assert "added user-defined message 50001" in notes
+    assert any("sp_addmessage @msgnum = 50001" in x for x in w.target_log)
 
 
 def test_cli_lift_ag_script_and_cutover_guard(tmp_path, capsys):
@@ -357,3 +376,19 @@ def test_seed_without_log_chain_takes_a_regular_full_backup(tmp_path):
     full = [s for s in w.source_log if s.startswith("BACKUP DATABASE")]
     assert full and "COPY_ONLY" not in full[0]
     assert any("log chain" in m for m in msgs)
+
+
+def test_master_key_is_reencrypted_by_the_targets_service_master_key(tmp_path, monkeypatch):
+    w = World()
+    w.dmk = True
+    lift = Lift(make_cfg(tmp_path), progress=lambda m: None, connect_fn=fake_connect(w))
+    monkeypatch.delenv("SOURCE_DB_MASTER_KEY_PASSWORD", raising=False)
+    notes = lift.reprovision_master_key(lift.src(), lift.tgt(), "Sales", "Sales")
+    assert "SOURCE_DB_MASTER_KEY_PASSWORD" in notes[0] and not any("MASTER KEY" in x for x in w.target_log)
+    monkeypatch.setenv("SOURCE_DB_MASTER_KEY_PASSWORD", "dmk'pw")
+    notes = lift.reprovision_master_key(lift.src(), lift.tgt(), "Sales", "Sales")
+    assert notes == ["database master key re-encrypted by the target's service master key"]
+    assert ("USE [Sales]; OPEN MASTER KEY DECRYPTION BY PASSWORD = N'dmk''pw'; ALTER MASTER KEY ADD ENCRYPTION BY "
+            "SERVICE MASTER KEY; CLOSE MASTER KEY; USE [master]") in w.target_log
+    w.dmk = False
+    assert lift.reprovision_master_key(lift.src(), lift.tgt(), "Sales", "Sales") == []

@@ -96,6 +96,14 @@ class MigrationConfig:
     copy_logins: bool = True              # server logins the database users map to (same SID and password)
     copy_agent_jobs: bool = False         # SQL Agent jobs with steps in this database (created disabled)
     copy_linked_servers: bool = False     # linked server definitions (remote passwords can't be copied)
+    copy_custom_messages: bool = True     # user-defined messages (sp_addmessage) the code raises
+    copy_server_configuration: bool = False   # apply the source's sp_configure values (curated list)
+    copy_server_triggers: bool = False    # server-level DDL/logon triggers (affect the whole instance)
+    create_target_database: bool = False  # CREATE DATABASE on the target (source collation) if it's missing
+    assess: bool = True                   # run the readiness assessment before migrating
+    sync_enable_change_tracking: bool = False   # turn on change tracking on the SOURCE for `sync` (changes it)
+    sync_retention_days: int = 7          # change-tracking retention when sync_enable_change_tracking is on
+    ignore_blockers: bool = False         # continue when the assessment finds blockers
 
 
 @dataclass
@@ -136,6 +144,9 @@ class LiftConfig:
     update_statistics_after: bool = False  # sp_updatestats after recovery (recommended on a newer version)
     copy_agent_jobs: bool = False       # SQL Agent jobs with steps in the database (created disabled)
     copy_linked_servers: bool = False   # linked server definitions (remote passwords can't be copied)
+    copy_custom_messages: bool = True   # user-defined messages (sp_addmessage) the code raises
+    assess: bool = True                 # readiness assessment in `lift plan`
+    database_master_key_password_env: str = "SOURCE_DB_MASTER_KEY_PASSWORD"   # re-encrypt the DMK by the SMK
     verify_sample_rows: int = 100_000   # rows per sampled checksum window in `lift verify`
     verify_windows_per_table: int = 3
     state_file: str = "lift_state.json"

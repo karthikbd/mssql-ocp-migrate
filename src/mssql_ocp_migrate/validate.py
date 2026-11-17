@@ -78,6 +78,36 @@ class ValidationResult:
 
 
 # ------------------------------------------------------------------ comparisons
+TEXT_KINDS = {"VIEW", "PROCEDURE", "FUNCTION", "TRIGGER", "RULE", "DEFAULT", "DDL TRIGGER"}
+
+
+def _norm_definition(text: Optional[str]) -> str:
+    """Definitions compared without line-ending and trailing-whitespace differences."""
+    return "\n".join(line.rstrip() for line in (text or "").replace("\r\n", "\n").strip().split("\n"))
+
+
+def module_diffs(src_modules, tgt_modules) -> List[str]:
+    """Same text, same ANSI_NULLS / QUOTED_IDENTIFIER, same disabled state and trigger order
+    for every view, procedure, function and trigger (not just "it exists")."""
+    tm = {(m.kind, m.fqn): m for m in tgt_modules}
+    out = []
+    for s in src_modules:
+        t = tm.get((s.kind, s.fqn))
+        if t is None or s.kind not in TEXT_KINDS or s.definition is None:
+            continue
+        name = f"{s.kind.lower()} {s.fqn.strip('.')}"
+        if _norm_definition(s.definition) != _norm_definition(t.definition):
+            out.append(f"{name}: definition differs")
+        sm, tmeta = s.meta or {}, t.meta or {}
+        for key, label in (("ansi_nulls", "ANSI_NULLS"), ("quoted_identifier", "QUOTED_IDENTIFIER")):
+            if key in sm and key in tmeta and sm[key] != tmeta[key]:
+                out.append(f"{name}: {label} {'ON' if sm[key] else 'OFF'} -> {'ON' if tmeta[key] else 'OFF'}")
+        if s.disabled != t.disabled:
+            out.append(f"{name}: disabled {s.disabled} -> {t.disabled}")
+        if sorted(sm.get("trigger_order", [])) != sorted(tmeta.get("trigger_order", [])):
+            out.append(f"{name}: trigger order {sm.get('trigger_order', [])} -> {tmeta.get('trigger_order', [])}")
+    return out
+
 def _schema_diff(s: Table, t: Optional[Table], options: bool = False, statistics: bool = False,
                  m=None) -> List[str]:
     """Differences between the source table ``s`` and the target table ``t``. ``m`` (the
@@ -88,7 +118,8 @@ def _schema_diff(s: Table, t: Optional[Table], options: bool = False, statistics
     tcols = {c.name: c for c in t.columns}
     attrs = ["type_name", "max_length", "precision", "scale", "nullable", "is_identity", "is_computed", "collation"]
     if m is not None:
-        attrs += ["is_sparse", "is_column_set", "xml_schema", "xml_document", "encryption_type", "encryption_key"]
+        attrs += ["is_sparse", "is_column_set", "xml_schema", "xml_document", "encryption_type", "encryption_key",
+                  "is_rowguidcol", "identity_not_for_replication"]
         if m.copy_data_masking:
             attrs.append("masking_function")
         if m.restore_system_versioning and s.temporal:
@@ -189,6 +220,10 @@ def extras_diff(cfg: Config, src: DatabaseExtras, tgt: DatabaseExtras) -> List[s
         for sch, own in src.schema_owners.items():
             if tgt.schema_owners.get(sch) != own and own in present:
                 out.append(f"schema {sch}: owner {own} -> {tgt.schema_owners.get(sch, 'dbo')}")
+        towners = {(s, n): o for s, n, o in tgt.object_owners}
+        for s, n, own in src.object_owners:
+            if towners.get((s, n)) != own and own in present:
+                out.append(f"object {s}.{n}: owner {own} -> {towners.get((s, n), 'schema owner')}")
         tk = {p.key for p in tgt.permissions}
         for p in src.permissions:
             if p.key not in tk and p.grantee in present | {"public"}:
@@ -335,9 +370,18 @@ class Validator:
             from .engine import Migrator
             src_modules = Migrator(self.cfg, self.factory, self.progress)._modules(src)
             if v.compare_schema and mc.copy_programmable_objects:
+                tgt_modules = tgt.list_modules()
                 smods = {(m.kind, m.fqn) for m in src_modules}
-                tmods = {(m.kind, m.fqn) for m in tgt.list_modules()}
+                tmods = {(m.kind, m.fqn) for m in tgt_modules}
                 res.object_diffs = [f"{k} {n} missing on target" for k, n in sorted(smods - tmods)]
+                res.object_diffs += module_diffs(src_modules, tgt_modules)
+                if hasattr(src, "unresolved_references") and hasattr(tgt, "unresolved_references"):
+                    try:
+                        new = tgt.unresolved_references() - src.unresolved_references()
+                        res.object_diffs += [f"{a} references {b}, which doesn't exist on the target"
+                                             for a, b in sorted(new)]
+                    except Exception as exc:  # pragma: no cover - permissions
+                        log.warning("reference check skipped: %s", exc)
                 for t in tables:
                     a, b = src.identity_current(t), tgt.identity_current(t)
                     if a is not None and b is not None and a != b:

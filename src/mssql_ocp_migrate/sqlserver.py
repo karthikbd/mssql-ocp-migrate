@@ -98,6 +98,10 @@ class SqlServer(CatalogMixin, Database):
                 out.append(f"CAST({qc} AS nvarchar(40))")
             elif t == "datetime":
                 out.append(f"CONVERT(nvarchar(30), {qc}, 126)")
+            elif t == "sql_variant":
+                out.append(variant_read_expr(qc))
+            elif t in ("json", "vector"):              # SQL Server 2025: travel as their JSON text
+                out.append(f"CAST({qc} AS nvarchar(max))")
             else:
                 out.append(qc)
         return out
@@ -154,10 +158,13 @@ class SqlServer(CatalogMixin, Database):
     def _checksum_expr(self, c: Column) -> str:
         qc = q(c.name)
         t = c.type_name.lower()
-        big = c.max_length == -1 or t in LOB_LEGACY_TYPES or t == "xml" or c.is_clr
+        if t == "sql_variant":              # base type, precision, scale, collation and value all count
+            return (f"HASHBYTES('SHA2_256', {variant_read_expr(qc)})" if self.major_version >= 13
+                    else f"BINARY_CHECKSUM({qc})")
+        big = c.max_length == -1 or t in LOB_LEGACY_TYPES or t in ("xml", "json", "vector") or c.is_clr
         if not big:
             return qc
-        if t in ("ntext", "xml"):
+        if t in ("ntext", "xml", "json", "vector"):
             inner = f"CAST(CAST({qc} AS nvarchar(max)) AS varbinary(max))"
         elif t == "text":
             inner = f"CAST(CAST({qc} AS varchar(max)) AS varbinary(max))"
@@ -237,6 +244,10 @@ class SqlServer(CatalogMixin, Database):
             raise RuntimeError(f"{table.fqn} has Always Encrypted columns: their ciphertext is copied with TDS "
                                "bulk insert, which needs the bundled driver on the target (driver = \"pytds\")")
         identity = table.has_identity
+        if any(c.type_name.lower() == "sql_variant" for c in cols):
+            # every value is rebuilt with its own base type (see variant_write_sql), which bulk
+            # copy and plain parameters can't express
+            return self._load_rows_pytds(table, cols, batches, identity)
         strategy = self._identity_strategy() if identity else ID_PLAIN_BULK
         if self.driver == "pyodbc":
             return self._load_pyodbc(table, cols, batches, identity)
@@ -313,18 +324,31 @@ class SqlServer(CatalogMixin, Database):
         collist = ", ".join(q(c.name) for c in cols)
         n = 0
         coerce = _coercers(cols)
+        variant = [c.type_name.lower() == "sql_variant" for c in cols]
         if identity:
             self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} ON")
         try:
             for batch in batches:
                 for i in range(0, len(batch), per_stmt):
                     part = batch[i:i + per_stmt]
-                    ph = "(" + ", ".join("?" for _ in cols) + ")"
                     params: List[Any] = []
+                    rows_sql = []
                     for r in part:
-                        params.extend(f(v) for f, v in zip(coerce, r)) if coerce else params.extend(r)
-                    self.execute(f"INSERT INTO {self.qualified(table)} ({collist}) VALUES "
-                                 + ", ".join(ph for _ in part), params)
+                        vals = [f(v) for f, v in zip(coerce, r)] if coerce else list(r)
+                        if any(variant):
+                            cells = []
+                            for is_var, v in zip(variant, vals):
+                                if is_var:
+                                    cells.append(variant_write_sql(v))
+                                else:
+                                    cells.append("?")
+                                    params.append(v)
+                            rows_sql.append("(" + ", ".join(cells) + ")")
+                        else:
+                            params.extend(vals)
+                            rows_sql.append("(" + ", ".join("?" for _ in cols) + ")")
+                    self.execute(f"INSERT INTO {self.qualified(table)} ({collist}) VALUES " + ", ".join(rows_sql),
+                                 params)
                     n += len(part)
         finally:
             if identity:
@@ -457,7 +481,7 @@ def pytds_type(c: Column):
               "date": T.DateType, "smalldatetime": T.SmallDateTimeType, "sql_variant": T.VariantType}
     if t in simple:
         return simple[t]()
-    if t == "xml":           # INSERT BULK rejects XML metadata; the server parses nvarchar(max) into xml
+    if t in ("xml", "json", "vector"):   # INSERT BULK rejects XML metadata; the server parses the text
         return T.NVarCharMaxType()
     if t == "float":
         return T.RealType() if 0 < c.precision <= 24 else T.FloatType()
@@ -501,6 +525,50 @@ def _name_bulk_column(exc: Exception, meta) -> Exception:
         return type(exc)(f"{exc} [column {col.column_name} sent as {col.type.get_declaration()}]")
     except Exception:
         return RuntimeError(f"{exc} [column {col.column_name} sent as {col.type.get_declaration()}]")
+
+
+_VARIANT_TEXT = ("char", "varchar", "nchar", "nvarchar")
+_VARIANT_BASES = {"bigint", "binary", "bit", "char", "date", "datetime", "datetime2", "datetimeoffset", "decimal",
+                  "float", "int", "money", "nchar", "numeric", "nvarchar", "real", "smalldatetime", "smallint",
+                  "smallmoney", "time", "tinyint", "uniqueidentifier", "varbinary", "varchar"}
+
+
+def variant_read_expr(qc: str) -> str:
+    """sql_variant as text 'basetype|precision|scale|maxlength|collation|value' so nothing about
+    the value is lost: text keeps its characters (and collation), every other base type travels
+    as its exact binary form."""
+    prop = lambda p, n: f"CAST(SQL_VARIANT_PROPERTY({qc}, '{p}') AS nvarchar({n}))"   # noqa: E731
+    return (f"CASE WHEN {qc} IS NULL THEN NULL ELSE CONCAT({prop('BaseType', 32)}, N'|', {prop('Precision', 8)}, "
+            f"N'|', {prop('Scale', 8)}, N'|', {prop('MaxLength', 8)}, N'|', ISNULL({prop('Collation', 128)}, N''), "
+            f"N'|', CASE WHEN CAST(SQL_VARIANT_PROPERTY({qc}, 'BaseType') AS sysname) IN "
+            f"('char', 'varchar', 'nchar', 'nvarchar') THEN CAST({qc} AS nvarchar(4000)) "
+            f"ELSE CONVERT(nvarchar(max), CAST({qc} AS varbinary(8000)), 1) END) END")
+
+
+def variant_write_sql(encoded: Optional[str]) -> str:
+    """The T-SQL expression that recreates a value read with variant_read_expr, base type included.
+    Each value is cast to sql_variant itself, so a multi-row VALUES list can't convert them to one
+    common type. Everything from the source is validated or quoted (no injection)."""
+    import re
+    if encoded is None:
+        return "NULL"
+    base, prec, scale, maxlen, coll, val = str(encoded).split("|", 5)
+    base = base.lower()
+    if base not in _VARIANT_BASES or not (prec + scale + maxlen).isdigit() \
+            or (coll and not re.fullmatch(r"\w+", coll)):
+        raise ValueError(f"unexpected sql_variant metadata: {encoded[:80]!r}")
+    if base in _VARIANT_TEXT:
+        size = max(1, int(maxlen) // (2 if base.startswith("n") else 1))
+        # COLLATE before the cast: the conversion to varchar uses that collation's code page
+        text = f"N'{val.replace(chr(39), chr(39) * 2)}'" + (f" COLLATE {coll}" if coll else "")
+        return f"CAST(CAST({text} AS {base}({size})) AS sql_variant)"
+    if not re.fullmatch(r"0x[0-9A-Fa-f]*", val):
+        raise ValueError(f"unexpected sql_variant value for {base}: {val[:40]!r}")
+    typ = {"decimal": f"decimal({prec},{scale})", "numeric": f"numeric({prec},{scale})",
+           "datetime2": f"datetime2({scale})", "time": f"time({scale})",
+           "datetimeoffset": f"datetimeoffset({scale})", "binary": f"binary({max(1, int(maxlen))})",
+           "varbinary": f"varbinary({max(1, int(maxlen))})"}.get(base, base)
+    return f"CAST(CAST({val} AS {typ}) AS sql_variant)"
 
 
 def _fixed_size_clr(c: Column) -> bool:

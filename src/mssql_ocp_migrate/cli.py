@@ -164,6 +164,55 @@ def cmd_check(args) -> int:
     return 0 if ok else 2
 
 
+def cmd_assess(args) -> int:
+    """Readiness assessment: what won't work, or will behave differently, on the target."""
+    import dataclasses
+    import json
+    from pathlib import Path
+    from .assess import assess, render
+    from .sqlserver import SqlServer
+    cfg = _load(args)
+    src = SqlServer(cfg.source, "source", autocommit=True)
+    tgt = None
+    if not args.source_only:
+        tcfg = cfg.target
+        try:
+            tgt = SqlServer(tcfg, "target", autocommit=True)
+        except Exception:                      # the target database may not exist yet
+            tgt = SqlServer(dataclasses.replace(tcfg, database="master"), "target", autocommit=True)
+    try:
+        a = assess(src, tgt, cfg.source.database, lift=args.lift)
+    finally:
+        src.close()
+        if tgt is not None:
+            tgt.close()
+    print(render(a))
+    out = Path(args.json) if args.json else Path(cfg.report_dir) / "assessment.json"
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(json.dumps(a.to_dict(), indent=2, default=str), encoding="utf-8")
+    print(f"\nwritten: {out}")
+    return 2 if a.blockers else 0
+
+
+def cmd_sync(args) -> int:
+    """Apply the source's changes (change tracking) to the target after migrate."""
+    from .sync import Syncer
+    cfg = _load(args)
+    log = logging.getLogger("mssql_ocp_migrate")
+    syncer = Syncer(cfg, progress=log.info)
+    while True:
+        res = syncer.run(final=args.final)
+        for fqn, why in res.skipped.items():
+            print(f"  skipped {fqn}: {why}")
+        print(f"sync {res.from_version} -> {res.to_version}: {res.rows:,} rows in {res.seconds:,.1f}s")
+        if args.final or not args.follow:
+            break
+        time.sleep(args.follow)
+    if args.final and not args.skip_validation:
+        return cmd_validate(args)
+    return 0
+
+
 def cmd_estimate(args) -> int:
     from .estimate import estimate, format_estimate
     from . import report
@@ -305,6 +354,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("check", help="test connectivity and list what will be migrated")
     common(sp, workers=False)
     sp.set_defaults(fn=cmd_check)
+    sp = sub.add_parser("assess", help="readiness assessment: what won't work or behaves differently on the target "
+                                       "(Linux/OpenShift, version, edition, server settings, code)")
+    common(sp, workers=False)
+    sp.add_argument("--lift", action="store_true", help="assess for a physical lift (backup/restore)")
+    sp.add_argument("--source-only", action="store_true", help="don't connect to the target")
+    sp.add_argument("--json", help="write the findings as JSON here (default: report_dir/assessment.json)")
+    sp.set_defaults(fn=cmd_assess)
+    sp = sub.add_parser("sync", help="after migrate: apply the source's changes (change tracking) so cut-over takes "
+                                     "minutes; --final during the cut-over window")
+    common(sp, workers=False)
+    sp.add_argument("--follow", type=int, metavar="SECONDS", help="repeat every SECONDS until interrupted")
+    sp.add_argument("--final", action="store_true", help="last pass (writes stopped): trust foreign keys, align "
+                                                         "identities and sequences, then validate")
+    sp.add_argument("--skip-validation", action="store_true")
+    sp.set_defaults(fn=cmd_sync)
     sp = sub.add_parser("estimate", help="measure throughput on a sample and project total time")
     common(sp)
     sp.add_argument("--sample-rows", type=int, default=50_000)

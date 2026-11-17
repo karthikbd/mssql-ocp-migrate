@@ -1,6 +1,6 @@
-name: End-to-end (SQL Server 2022)
+name: End-to-end (SQL Server)
 
-# Runs the e2e suite against two real SQL Server 2022 containers (source and target), the same
+# Runs the e2e suite against two real SQL Server containers (source and target) for each version pair, the same
 # setup as tests/e2e/docker-compose.yml: a full logical migration with validation, then lift.
 on:
   push:
@@ -14,12 +14,25 @@ concurrency:
   group: e2e-${{ github.ref }}
   cancel-in-progress: true
 
+
 jobs:
   e2e:
+    name: e2e ${{ matrix.name }}
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
       contents: read
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {name: "2022 -> 2022", source: "2022-latest", target: "2022-latest"}
+          - {name: "2019 -> 2022", source: "2019-latest", target: "2022-latest"}
+          - {name: "2022 -> 2025", source: "2022-latest", target: "2025-latest"}
+          - {name: "2025 -> 2025", source: "2025-latest", target: "2025-latest"}
+    env:
+      SOURCE_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.source }}
+      TARGET_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.target }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:

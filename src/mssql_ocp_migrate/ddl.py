@@ -61,6 +61,9 @@ def type_sql(c: Column) -> str:
         return f"{t}({c.scale})"
     if t == "float":
         return "float" if c.precision in (0, 53) else f"float({c.precision})"
+    if t == "vector":
+        base = (c.vector_base_type or "float32").lower()
+        return f"vector({c.vector_dimensions}{', float16' if base == 'float16' else ''})"
     return t
 
 
@@ -78,7 +81,10 @@ def column_sql(c: Column, masking: bool = True, named_default: bool = True) -> s
     if masking and c.masking_function:
         parts.append(f"MASKED WITH (FUNCTION = '{c.masking_function.replace(chr(39), chr(39) * 2)}')")
     if c.is_identity:
-        parts.append(f"IDENTITY({c.identity_seed or 1},{c.identity_increment or 1})")
+        parts.append(f"IDENTITY({c.identity_seed or 1},{c.identity_increment or 1})"
+                     + (" NOT FOR REPLICATION" if c.identity_not_for_replication else ""))
+    if c.is_rowguidcol:
+        parts.append("ROWGUIDCOL")
     if c.encrypted:
         parts.append(f"ENCRYPTED WITH (COLUMN_ENCRYPTION_KEY = {q(c.encryption_key or '')}, "
                      f"ENCRYPTION_TYPE = {c.encryption_type}, "
@@ -247,13 +253,24 @@ def post_load_sql(t: Table, build: Optional[BuildOptions] = None, memory: bool =
     if not (memory and t.memory_optimized):
         # clustered first so nonclustered indexes are not rebuilt
         for ix in sorted(t.indexes, key=lambda i: not i.clustered):
-            out.append(index_sql(t, ix, build, partitions))
+            if not ix.is_disabled:
+                out.append(index_sql(t, ix, build, partitions))
     for xi in sorted(t.xml_indexes, key=lambda x: not x.primary):
         out.append(xml_index_sql(t, xi))
     for si in t.spatial_indexes:
         out.append(spatial_index_sql(t, si))
     for ck in t.checks:
         out.extend(check_sql(t, ck))
+    return out
+
+
+def disabled_indexes_sql(t: Table, partitions: bool = True) -> List[str]:
+    """Indexes disabled on the source, created and disabled while the table is still empty, so the
+    load doesn't maintain them (as on the source) and no build is wasted."""
+    out = []
+    for ix in t.indexes:
+        if ix.is_disabled and not ix.clustered and not t.memory_optimized:
+            out += [index_sql(t, ix, None, partitions), f"ALTER INDEX {q(ix.name)} ON {qt(t)} DISABLE"]
     return out
 
 
@@ -513,3 +530,37 @@ def cdc_sql(tables: List[CdcTable]) -> List[str]:
                    + (f"@index_name = {lit(c.index)}, " if c.index else "")
                    + f"@captured_column_list = {lit(', '.join(q(x) for x in c.columns))}")
     return out
+
+
+# ------------------------------------------------------------------ modules
+def module_statements(mod) -> List[str]:
+    """Statements that recreate one module exactly as the source has it: under the source's
+    ANSI_NULLS / QUOTED_IDENTIFIER settings (they are compiled into the module: ANSI_NULLS OFF
+    makes ``= NULL`` true for NULLs, QUOTED_IDENTIFIER OFF makes "x" a string), then its disabled
+    state and trigger firing order. The session settings are restored at the end."""
+    if mod.definition is None:
+        return []
+    meta = mod.meta or {}
+    before, after = [], []
+    if meta.get("ansi_nulls") is False:
+        before.append("SET ANSI_NULLS OFF")
+        after.append("SET ANSI_NULLS ON")
+    if meta.get("quoted_identifier") is False:
+        before.append("SET QUOTED_IDENTIFIER OFF")
+        after.append("SET QUOTED_IDENTIFIER ON")
+    out = before + [mod.definition.strip()] + after
+    if mod.kind == "TRIGGER" and mod.disabled and mod.parent:
+        out.append(f"DISABLE TRIGGER {q(mod.schema)}.{q(mod.name)} ON "
+                   + ".".join(q(p) for p in mod.parent.split(".", 1)))
+    if mod.kind == "DDL TRIGGER" and mod.disabled:
+        out.append(f"DISABLE TRIGGER {q(mod.name)} ON DATABASE")
+    for order, event in meta.get("trigger_order", []):
+        name = q(mod.name) if mod.kind == "DDL TRIGGER" else f"{q(mod.schema)}.{q(mod.name)}"
+        out.append(f"EXEC sys.sp_settriggerorder @triggername = {lit(name)}, @order = {lit(order.title())}, "
+                   f"@stmttype = {lit(event)}" + (", @namespace = N'DATABASE'" if mod.kind == "DDL TRIGGER" else ""))
+    return out
+
+
+def object_owner_sql(schema: str, name: str, owner: str) -> str:
+    """An object owned by a principal other than its schema's owner (ownership chains, EXECUTE AS OWNER)."""
+    return f"ALTER AUTHORIZATION ON OBJECT::{q(schema)}.{q(name)} TO {q(owner)}"
