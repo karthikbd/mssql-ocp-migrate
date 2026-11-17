@@ -100,8 +100,7 @@ SELECT cu.CustomerId,
        HASHBYTES('MD5', CAST(i AS varchar(12))),
        CASE WHEN i % 9 = 0 THEN NULL ELSE 'AB' END,
        CASE WHEN i % 500 = 0 THEN CAST(CONCAT('<order id="', i, '"><note>x &amp; y</note></order>') AS xml) END
-FROM n JOIN cu ON cu.rn = n.i % @cnt
-OPTION (HASH JOIN);
+FROM n JOIN cu ON cu.rn = n.i % @cnt;
 DROP TABLE #cu;
 GO
 DELETE FROM sales.[Order] WHERE OrderId BETWEEN 1000 AND 1999;    -- gap
