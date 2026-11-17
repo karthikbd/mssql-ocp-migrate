@@ -212,6 +212,8 @@ class FakeConn:
             return [("Enterprise Edition",)]
         if "recovery_model_desc" in sql:
             return [("FULL", 150, False, "ONLINE")]
+        if "database_recovery_status" in sql:     # a full backup started the log chain long ago
+            return [(None if getattr(w, "no_log_chain", False) else 1000,)]
         if "FROM sys.master_files" in sql:
             return [("ROWS", 100 * 1024 * 1024 * 1024 / 1024, 8), ("LOG", 200.0, 1)]
         if "type = 'D'" in sql and "TOP 5" in sql:
@@ -345,3 +347,13 @@ def test_cli_lift_ag_script_and_cutover_guard(tmp_path, capsys):
     assert main(["lift", "ag-script", "-c", str(c)]) == 0
     assert "tcp://mssql.ocp:5022" in capsys.readouterr().out
     assert main(["lift", "cutover", "-c", str(c)]) == 2          # refuses without --confirm
+
+
+def test_seed_without_log_chain_takes_a_regular_full_backup(tmp_path):
+    w = World()
+    w.no_log_chain = True                  # never backed up: COPY_ONLY wouldn't start the log chain
+    msgs = []
+    Lift(make_cfg(tmp_path), progress=msgs.append, connect_fn=fake_connect(w)).seed("Sales")
+    full = [s for s in w.source_log if s.startswith("BACKUP DATABASE")]
+    assert full and "COPY_ONLY" not in full[0]
+    assert any("log chain" in m for m in msgs)

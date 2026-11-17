@@ -98,7 +98,10 @@ source's `IDENT_CURRENT`.
 | computed | created with its definition (and PERSISTED); never inserted; compared in validation |
 | `rowversion` / `timestamp` | created; never inserted (the target assigns new values); excluded from validation |
 | `datetime2(7)`, `time(7)`, `datetimeoffset(7)`, `datetime` | moved as ISO text, so no precision is lost |
-| `geography`, `geometry`, `hierarchyid`, CLR user-defined types | moved as `varbinary(max)`; the assembly and type are created first |
+| `geography`, `geometry`, CLR user-defined types | moved as `varbinary(max)`; the assembly and type are created first |
+| `hierarchyid` | moved as its path text (`/1/3/`), which converts back exactly |
+| `xml` (typed or not), column sets | moved as `nvarchar(max)`; the server parses and validates it |
+| `binary(n)` | sent with `BINARY(n)` bulk metadata (written by mssql-ocp-migrate; the bundled driver has none) |
 | sparse columns and column sets | created `SPARSE` with their `COLUMN_SET FOR ALL_SPARSE_COLUMNS`; the column set itself is never inserted |
 | masked columns | created with the same `MASKED WITH (FUNCTION = ...)`; the source login needs `UNMASK` or the run stops |
 | typed `xml` | created with `DOCUMENT`/`CONTENT` and its XML schema collection |
@@ -106,7 +109,6 @@ source's `IDENT_CURRENT`.
 | temporal period columns | copied as ordinary columns, then `PERIOD FOR SYSTEM_TIME`, `HIDDEN` and `SYSTEM_VERSIONING` are restored |
 | alias types (`CREATE TYPE ... FROM`) | created on the target first, then used by the columns |
 | `sysname` | created as `nvarchar(128)` |
-| `binary(n)` | sent as `varbinary(n)`; the bundled driver has no `BINARY` bulk serializer, and SQL Server converts |
 | NULL in a column with a DEFAULT | stays NULL (`KEEP_NULLS`) |
 
 ## Indexes and statistics

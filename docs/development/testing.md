@@ -13,6 +13,9 @@ server.
 
 ## Running
 
+CI runs the end-to-end suite on every push (`.github/workflows/e2e.yml`) against two SQL Server
+2022 Linux containers with SQL Agent enabled. To run it locally:
+
 ```console
 $ pytest -q                               # everything except e2e (those are skipped)
 $ docker compose -f tests/e2e/docker-compose.yml up -d
@@ -24,7 +27,11 @@ The end-to-end seed script (`tests/e2e/seed_source.sql`) builds about 1.1 millio
 every common type: identity with gaps and a custom seed, composite keys, computed and rowversion
 columns, `datetime2(7)` with 100 ns ticks, `datetimeoffset(7)`, geography, hierarchyid, xml, LOBs,
 a heap with duplicate rows, alias types, sequences, filtered and INCLUDE indexes, cascading FKs,
-views, a function, a procedure, a disabled trigger and a synonym.
+views, a function, a procedure, a disabled trigger and a synonym. Since 0.3.0 it also has masked,
+sparse and typed-XML columns with a column set, row-level security, a table type, a partitioned
+table with per-partition compression, XML and spatial indexes, a temporal table with history, a
+memory-optimized table, a rule binding, Service Broker objects, a certificate-signed procedure, a
+DDL trigger, a plan guide, change tracking, CDC, a SQL login, a SQL Agent job and a linked server.
 
 Environment variables for e2e: `E2E_SRC_HOST`, `E2E_SRC_PORT`, `E2E_TGT_HOST`, `E2E_TGT_PORT`,
 `E2E_USER`, `E2E_PASSWORD`, `E2E_ENCRYPT`, `E2E_DRIVER`, `E2E_WORKERS`.

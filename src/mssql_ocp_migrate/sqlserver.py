@@ -89,7 +89,9 @@ class SqlServer(CatalogMixin, Database):
         for c in columns:
             t = c.type_name.lower()
             qc = q(c.name)
-            if c.is_clr:
+            if t == "hierarchyid" and not c.clr_udt:
+                out.append(f"CAST({qc} AS nvarchar(4000))")     # '/1/3/': converts back exactly
+            elif c.is_clr:
                 out.append(f"CAST({qc} AS varbinary(max))")
             elif t in ("datetime2", "datetimeoffset", "time") and (c.scale > 6 or self.driver == "pymssql"):
                 # default conversion is ISO (yyyy-mm-dd hh:mi:ss.fffffff [+hh:mm]), DATEFORMAT-independent
@@ -234,7 +236,8 @@ class SqlServer(CatalogMixin, Database):
             return self._load_pyodbc(table, cols, batches, identity)
         if self.driver == "pymssql":
             return self._load_pymssql(table, cols, batches, identity, strategy, tablock)
-        if strategy == ID_ROW_INSERT:
+        if strategy == ID_ROW_INSERT or any(_fixed_size_clr(c) for c in cols):
+            # INSERT BULK rejects varbinary metadata for size-capped CLR types; INSERT converts
             return self._load_rows_pytds(table, cols, batches, identity)
         if strategy == ID_SET_INSERT_BULK:
             self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} ON")
@@ -424,17 +427,21 @@ def pytds_type(c: Column):
     t = c.type_name.lower()
     if c.encrypted:                 # ciphertext travels as varbinary (ALLOW_ENCRYPTED_VALUE_MODIFICATIONS)
         return T.VarBinaryMaxType() if c.max_length == -1 else T.VarBinaryType(size=8000)
-    if c.is_clr:            # hierarchyid and size-capped CLR types must not be sent as (max)
-        return T.VarBinaryType(size=c.max_length) if 0 < c.max_length <= 8000 else T.VarBinaryMaxType()
+    if t == "hierarchyid" and not c.clr_udt:
+        return T.NVarCharType(size=4000)        # travels as its string form, see select_exprs()
+    if c.is_clr:
+        return T.VarBinaryMaxType()
     if (t in ("datetime2", "datetimeoffset", "time") and c.scale > 6) or t == "datetime":
         return T.NVarCharType(size=40)          # travels as ISO text, see select_exprs()
     simple = {"bit": T.BitType, "tinyint": T.TinyIntType, "smallint": T.SmallIntType, "int": T.IntType,
               "bigint": T.BigIntType, "real": T.RealType, "money": T.MoneyType,
               "smallmoney": T.SmallMoneyType, "text": T.TextType, "ntext": T.NTextType,
-              "image": T.ImageType, "xml": T.XmlType, "uniqueidentifier": T.UniqueIdentifierType,
+              "image": T.ImageType, "uniqueidentifier": T.UniqueIdentifierType,
               "date": T.DateType, "smalldatetime": T.SmallDateTimeType, "sql_variant": T.VariantType}
     if t in simple:
         return simple[t]()
+    if t == "xml":           # INSERT BULK rejects XML metadata; the server parses nvarchar(max) into xml
+        return T.NVarCharMaxType()
     if t == "float":
         return T.RealType() if 0 < c.precision <= 24 else T.FloatType()
     if t in ("decimal", "numeric"):
@@ -458,6 +465,12 @@ def pytds_type(c: Column):
     if t == "datetimeoffset":
         return T.DateTimeOffsetType(precision=c.scale)
     raise ValueError(f"unsupported column type {c.type_name} ({c.name})")
+
+
+def _fixed_size_clr(c: Column) -> bool:
+    """A user-defined CLR type with a byte cap (MaxByteSize < 8000), as opposed to geography /
+    geometry / (max) types, which bulk-load as varbinary(max)."""
+    return c.clr_udt and 0 < c.max_length <= 8000
 
 
 def _binary_serializer_class():

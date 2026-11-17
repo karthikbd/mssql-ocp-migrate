@@ -72,12 +72,12 @@ def tuning(lift: LiftConfig, devices: Sequence[str]) -> Tuple[int, int]:
     return mts, int(max(2, min(bc, cap)))
 
 
-def backup_full_sql(db: str, devices: Sequence[str], lift: LiftConfig) -> str:
+def backup_full_sql(db: str, devices: Sequence[str], lift: LiftConfig, copy_only: Optional[bool] = None) -> str:
     mts, bc = tuning(lift, devices)
     opts = ["FORMAT", "INIT", "CHECKSUM", "STATS = 1", f"MAXTRANSFERSIZE = {mts}", f"BUFFERCOUNT = {bc}"]
     if lift.compression:
         opts.insert(0, "COMPRESSION")
-    if lift.copy_only:
+    if lift.copy_only if copy_only is None else copy_only:
         opts.insert(0, "COPY_ONLY")
     return f"BACKUP DATABASE {q(db)} TO {_media(devices)} WITH {', '.join(opts)}"
 
@@ -473,6 +473,16 @@ class Lift:
         return p
 
     # -- seed: full backup + restore ---------------------------------------------
+    def _log_chain_started(self, db: str) -> bool:
+        """True when log backups are possible (a full backup has started the log chain)."""
+        s = self.src()
+        try:
+            rows = s.query("SELECT last_log_backup_lsn FROM sys.database_recovery_status "
+                           "WHERE database_id = DB_ID(?)", [db])
+        finally:
+            s.close()
+        return bool(rows) and rows[0][0] is not None
+
     def seed(self, db: str, restart: bool = False) -> None:
         st = self.state.db(db)
         tdb = self.target_name(db)
@@ -487,7 +497,14 @@ class Lift:
         if lf.transfer_tde_certificates:
             self.transfer_tde(db)
         self.state.update(db, phase="backing_up", full_devices=src_dev)
-        LongOp(self.cfg.source, self.progress, connect_fn=self._connect).run(backup_full_sql(db, src_dev, lf), f"{db} full backup")
+        copy_only = lf.copy_only
+        if copy_only and not self._log_chain_started(db):
+            # a COPY_ONLY full backup doesn't start the log chain: BACKUP LOG would then fail
+            copy_only = False
+            self.progress(f"{db}: no full backup has started the log chain yet, so this full backup "
+                          "is a regular one (not COPY_ONLY); later differentials are based on it")
+        LongOp(self.cfg.source, self.progress, connect_fn=self._connect).run(
+            backup_full_sql(db, src_dev, lf, copy_only), f"{db} full backup")
         s = self.src()
         try:
             full = s.query("""

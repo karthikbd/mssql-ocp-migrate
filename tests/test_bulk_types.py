@@ -34,8 +34,8 @@ CASES = [
     (Column("a", "nvarchar", max_length=-1), "ü" * 50_000, "NVARCHAR(MAX)"),
     # binary(n) is declared BINARY(n) and written by our own BINARY serializer (see below)
     (Column("a", "binary", max_length=4), b"\x00\x01\x02\x03", "BINARY(4)"),
-    # hierarchyid is capped at 892 bytes: (max) metadata is rejected as an invalid length
-    (Column("a", "hierarchyid", max_length=892), b"\x58", "VARBINARY(892)"),
+    # hierarchyid travels as its string form ('/1/3/'); varbinary metadata is rejected for it
+    (Column("a", "hierarchyid", max_length=892), "/1/3/", "NVARCHAR(4000)"),
     (Column("a", "varbinary", max_length=16), b"\xff" * 16, "VARBINARY(16)"),
     (Column("a", "varbinary", max_length=-1), b"\x01" * 200_000, "VARBINARY(MAX)"),
     (Column("a", "uniqueidentifier"), uuid.uuid4(), "UNIQUEIDENTIFIER"),
@@ -50,7 +50,8 @@ CASES = [
     (Column("a", "time", scale=7), "10:00:00.1234567", "NVARCHAR(40)"),
     (Column("a", "datetime"), "2024-05-01T10:00:00.003", "NVARCHAR(40)"),
     (Column("a", "geography"), b"\xe6\x10\x00\x00\x01\x0c" + b"\x00" * 16, "VARBINARY(MAX)"),
-    (Column("a", "xml"), "<a b='1'/>", "XML"),
+    # INSERT BULK rejects XML metadata; nvarchar(max) is parsed into the (typed) xml column
+    (Column("a", "xml"), "<a b='1'/>", "NVARCHAR(MAX)"),
 ]
 
 
@@ -109,6 +110,20 @@ def test_column_set_replaces_sparse_columns_in_the_load():
     assert [c.name for c in plain.insert_columns] == ["Id", "Fax"]
 
 
+def test_size_capped_clr_types_use_row_inserts():
+    from mssql_ocp_migrate.model import Table
+    from mssql_ocp_migrate.sqlserver import _fixed_size_clr
+    udt = Column("P", "Point", 16, clr_udt=True, user_type="Point", user_type_schema="geo")
+    assert _fixed_size_clr(udt) and not _fixed_size_clr(Column("g", "geography", -1))
+    db = SqlServer.__new__(SqlServer)
+    db.driver, calls = "pytds", []
+    db._load_rows_pytds = lambda t, cols, b, ident: calls.append("rows") or 0
+    db._insert_bulk_pytds = lambda *a: calls.append("bulk") or 0
+    db.bulk_load(Table("geo", "T", columns=[Column("Id", "int"), udt]), [], False)
+    db.bulk_load(Table("geo", "U", columns=[Column("Id", "int"), Column("g", "geography", -1)]), [], False)
+    assert calls == ["rows", "bulk"]
+
+
 def test_unknown_type_is_rejected():
     with pytest.raises(ValueError, match="unsupported"):
         pytds_type(Column("a", "cursor"))
@@ -118,7 +133,8 @@ def test_select_expressions_keep_full_precision():
     db = SqlServer.__new__(SqlServer)
     db.driver = "pytds"
     cols = [Column("d2", "datetime2", scale=7), Column("d", "datetime"), Column("g", "geometry"),
-            Column("t3", "time", scale=3), Column("n", "nvarchar", max_length=20)]
+            Column("t3", "time", scale=3), Column("n", "nvarchar", max_length=20),
+            Column("h", "hierarchyid", max_length=892)]
     exprs = SqlServer.select_exprs(db, None, cols)
     assert exprs == ["CAST([d2] AS nvarchar(40))", "CONVERT(nvarchar(30), [d], 126)",
-                     "CAST([g] AS varbinary(max))", "[t3]", "[n]"]
+                     "CAST([g] AS varbinary(max))", "[t3]", "[n]", "CAST([h] AS nvarchar(4000))"]

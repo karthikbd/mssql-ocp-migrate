@@ -26,8 +26,10 @@ side is chosen independently: you can read with one driver and write with anothe
 - **Bulk copy and NULLs (pymssql).** FreeTDS bulk copy cannot keep NULL in a column that has a
   DEFAULT; SQL Server would write the default instead. Such tables, and tables with xml, CLR or
   `datetimeoffset` columns, are loaded with multi-row INSERTs instead.
-- **Spatial and CLR types** (`geography`, `geometry`, `hierarchyid`) travel as `varbinary(max)`
-  and SQL Server converts them back.
+- **Spatial and CLR types** (`geography`, `geometry`, user-defined CLR types) travel as
+  `varbinary(max)` and SQL Server converts them back; `hierarchyid` travels as its path text
+  (`/1/3/`), and `xml` as `nvarchar(max)`, because `INSERT BULK` rejects their native metadata.
+  User-defined CLR types with a size cap are loaded with INSERT statements.
 
 ## Encryption
 
