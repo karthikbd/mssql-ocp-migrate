@@ -253,8 +253,10 @@ class SqlServer(CatalogMixin, Database):
             return self._load_pyodbc(table, cols, batches, identity)
         if self.driver == "pymssql":
             return self._load_pymssql(table, cols, batches, identity, strategy, tablock)
-        if strategy == ID_ROW_INSERT or table.fqn in _PYTDS_NO_BULK or any(_fixed_size_clr(c) for c in cols):
-            # INSERT BULK rejects varbinary metadata for size-capped CLR types; INSERT converts
+        if strategy == ID_ROW_INSERT or table.fqn in _PYTDS_NO_BULK or any(_fixed_size_clr(c) for c in cols) \
+                or any(c.type_name.lower() in _LEGACY_LOB for c in cols):
+            # INSERT BULK rejects varbinary metadata for size-capped CLR types, and the bundled
+            # driver can't stream the deprecated text/ntext/image types; INSERT converts
             return self._load_rows_pytds(table, cols, batches, identity)
         if strategy == ID_SET_INSERT_BULK:
             self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} ON")
@@ -542,6 +544,9 @@ def variant_read_expr(qc: str) -> str:
             f"N'|', {prop('Scale', 8)}, N'|', {prop('MaxLength', 8)}, N'|', ISNULL({prop('Collation', 128)}, N''), "
             f"N'|', CASE WHEN CAST(SQL_VARIANT_PROPERTY({qc}, 'BaseType') AS sysname) IN "
             f"('char', 'varchar', 'nchar', 'nvarchar') THEN CAST({qc} AS nvarchar(4000)) "
+            # varbinary can't convert to float/real, so those travel as round-trip text (style 3: 17 digits)
+            f"WHEN CAST(SQL_VARIANT_PROPERTY({qc}, 'BaseType') AS sysname) IN ('float', 'real') "
+            f"THEN CONVERT(nvarchar(64), CAST({qc} AS float), 3) "
             f"ELSE CONVERT(nvarchar(max), CAST({qc} AS varbinary(8000)), 1) END) END")
 
 
@@ -562,6 +567,11 @@ def variant_write_sql(encoded: Optional[str]) -> str:
         # COLLATE before the cast: the conversion to varchar uses that collation's code page
         text = f"N'{val.replace(chr(39), chr(39) * 2)}'" + (f" COLLATE {coll}" if coll else "")
         return f"CAST(CAST({text} AS {base}({size})) AS sql_variant)"
+    if base in ("float", "real"):
+        if not re.fullmatch(r"-?[0-9]+(\.[0-9]+)?(E[-+]?[0-9]+)?", val, re.I):
+            raise ValueError(f"unexpected sql_variant value for {base}: {val[:40]!r}")
+        # through float first: the text holds the exact double, which narrows to the same real
+        return f"CAST(CAST(CAST(N'{val}' AS float) AS {base}) AS sql_variant)"
     if not re.fullmatch(r"0x[0-9A-Fa-f]*", val):
         raise ValueError(f"unexpected sql_variant value for {base}: {val[:40]!r}")
     typ = {"decimal": f"decimal({prec},{scale})", "numeric": f"numeric({prec},{scale})",
@@ -629,7 +639,8 @@ def _BinaryColumn(size: int, **kw):
 
 _PYMSSQL_NO_BULK: set = set()
 _PYTDS_NO_BULK: set = set()
-_BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size")
+_BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size", "Bulk load data was expected but not sent")
+_LEGACY_LOB = ("text", "ntext", "image")
 
 
 def _pymssql_coercers(cols: Sequence[Column]):

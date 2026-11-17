@@ -123,6 +123,12 @@ def test_sql_variant_values_keep_their_base_type():
     assert variant_write_sql("varchar|0|0|5|Greek_CI_AS|x") == \
         "CAST(CAST(N'x' COLLATE Greek_CI_AS AS varchar(5)) AS sql_variant)"
     assert variant_write_sql(None) == "NULL"
+    assert variant_write_sql("float|53|0|8||1.0000000000000001E-300") == \
+        "CAST(CAST(CAST(N'1.0000000000000001E-300' AS float) AS float) AS sql_variant)"
+    assert variant_write_sql("real|24|0|4||-2.5000000000000000E+000") == \
+        "CAST(CAST(CAST(N'-2.5000000000000000E+000' AS float) AS real) AS sql_variant)"
+    with pytest.raises(ValueError):
+        variant_write_sql("float|53|0|8||1);DROP TABLE x--")
     for bad in ("int|10|0|4||0x00;DROP TABLE t", "xml|0|0|0||x", "varchar|0|0|5|a b|x", "int|1x|0|4||0x00"):
         with pytest.raises(ValueError):
             variant_write_sql(bad)
