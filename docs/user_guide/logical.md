@@ -11,7 +11,9 @@ preflight ─► schema ─► plan chunks ─► parallel copy ─► indexes &
 
 1. **Preflight.** Reads the source catalog: tables, columns, alias types, identity, computed
    columns, defaults, keys, indexes, foreign keys, checks and programmable objects. Applies the
-   `if_target_not_empty` policy. Collects warnings for anything that needs attention.
+   `if_target_not_empty` policy. Collects warnings for anything that needs attention, and runs
+   the readiness assessment ({doc}`assess`). With change tracking on, records the source's version
+   for {doc}`sync`.
 2. **Schema** (`schema_mode = "create"`). Creates schemas, alias types, sequences (starting at the
    source's current value) and tables with their primary keys and defaults.
 3. **Plan.** Splits each table into chunks of about `chunk_rows` rows by key range, with one
@@ -101,6 +103,11 @@ source's `IDENT_CURRENT`.
 | `geography`, `geometry`, CLR user-defined types | moved as `varbinary(max)`; the assembly and type are created first |
 | `hierarchyid` | moved as its path text (`/1/3/`), which converts back exactly |
 | `xml` (typed or not), column sets | moved as `nvarchar(max)`; the server parses and validates it |
+| `sql_variant` | each value keeps its base type, precision, scale and collation (rebuilt with its own `CAST`); Microsoft's online migration skips this type |
+| `json`, `vector` (SQL Server 2025) | moved as their JSON text; the target must be SQL Server 2025 |
+| FILESTREAM | created as `varbinary(max)` (SQL Server on Linux has no FILESTREAM), data copied into the database |
+| `ROWGUIDCOL`, `IDENTITY ... NOT FOR REPLICATION` | kept |
+| `ANSI_PADDING OFF` columns | values copied exactly; reported, because new trailing blanks are kept on the target |
 | `binary(n)` | sent with `BINARY(n)` bulk metadata (written by mssql-ocp-migrate; the bundled driver has none) |
 | sparse columns and column sets | created `SPARSE` with their `COLUMN_SET FOR ALL_SPARSE_COLUMNS`; the column set itself is never inserted |
 | masked columns | created with the same `MASKED WITH (FUNCTION = ...)`; the source login needs `UNMASK` or the run stops |
@@ -190,14 +197,27 @@ after the load, so the target's history begins at cut-over; consumers resynchron
 CDC needs SQL Agent on the target.
 
 **Server objects.** `copy_agent_jobs = true` copies jobs whose steps run in this database, with
-their steps, schedules and categories, pointed at the target database and created **disabled**:
-enable them at cut-over so they don't run against both servers. `copy_linked_servers = true`
+their steps, schedules, categories and the operator they notify, pointed at the target database
+and created **disabled**: enable them at cut-over so they don't run against both servers. Jobs
+with steps SQL Agent on Linux can't run (CmdExec, PowerShell, SSIS) are reported and skipped.
+`copy_custom_messages = true` (the default) adds the user-defined messages the code raises with
+`RAISERROR(50001, ...)`, unless the target already has that number. Copied logins keep their
+default language (it sets date formats), their user-defined server roles and their server-level
+permissions. `copy_server_configuration = true` applies the source's `sp_configure` values from a
+curated list (`clr enabled`, `nested triggers`, `cross db ownership chaining`, MAXDOP, ...; never
+`xp_cmdshell`), and `copy_server_triggers = true` copies server triggers, created disabled. `copy_linked_servers = true`
 copies linked servers and their options; remote passwords can't be read, so mapped logins are
 reported for you to re-enter.
 
 The database's **default collation** can't be changed after creation: if it differs, the run warns.
 Columns keep their own collations, but temp tables, variables and literals follow the target's
 default, so create the target database with the source's collation.
+
+## Creating the target database
+
+The target database normally exists already (an OpenShift operator or a DBA creates it). With
+`create_target_database = true`, `migrate` creates it when it's missing, with the source
+database's collation and containment, which avoids the collation warning below.
 
 ## Programmable objects
 
@@ -206,6 +226,13 @@ multi-statement), triggers, synonyms, sequences, alias and table types, XML sche
 rules and defaults (with their bindings), plan guides (disabled guides stay disabled) and database
 DDL triggers, using their stored definitions. Encrypted modules can't be read and are reported as
 DDL errors.
+
+Each module is created under the source's `ANSI_NULLS` and `QUOTED_IDENTIFIER` settings, which
+are compiled into it: a procedure created with `ANSI_NULLS OFF` treats `= NULL` as true for NULLs,
+and with `QUOTED_IDENTIFIER OFF` reads `"x"` as a string. Recreating it under the defaults would
+change its behaviour without any error. Trigger firing order (`sp_settriggerorder`), disabled
+triggers, and objects owned by a principal other than their schema's owner are kept too.
+Indexes disabled on the source are created and disabled while the table is empty.
 
 **CLR.** Assemblies are copied from their binaries in dependency order, followed by CLR types,
 procedures, functions, triggers and aggregates. Under `clr strict security` set

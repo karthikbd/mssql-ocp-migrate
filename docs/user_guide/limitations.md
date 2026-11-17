@@ -12,11 +12,13 @@ can't be copied over a connection, or isn't supported by SQL Server on Linux:
 | linked-server remote passwords | the linked server is copied (`copy_linked_servers`), its mapped logins are reported | re-enter the remote passwords |
 | contained users with passwords, Entra ID users | not recreated; reported | recreate them (a contained user's password hash can't be copied) |
 | graph tables, FileTables, external tables, ledger tables | skipped and reported as errors | use `lift` |
-| selective XML indexes | not created; reported | create them after the load |
-| server settings, server roles other than memberships of copied logins, other databases' jobs | not copied | out of scope: one database at a time |
+| selective XML indexes, vector indexes (SQL Server 2025) | not created; reported | create them after the load |
+| SQL Agent jobs with CmdExec, PowerShell or SSIS steps | skipped on a Linux target; reported | rewrite the steps in T-SQL or run them as OpenShift CronJobs |
+| server triggers, `sp_configure` values | reported by `assess`; copied only with `copy_server_triggers` / `copy_server_configuration` | review them: they affect the whole instance |
+| credentials, proxies, Database Mail accounts, audits, Extended Events sessions, Resource Governor, endpoints, startup procedures | reported by `assess`, not copied | recreate them; their secrets can't be read |
+| other databases' jobs, cross-database references | reported by `assess` | migrate those databases too |
 | `WITH ENCRYPTION` modules | can't be read, so reported as DDL errors | deploy them from source control |
 | tables without a key (and keys on encrypted columns) | one chunk each; row-by-row validation | add a key if possible |
-| `sql_variant` columns | copied; warned | check the base types |
 
 Some features need something on the target first: CDC needs SQL Agent (`MSSQL_AGENT_ENABLED`),
 full-text indexes need the full-text package (`mssql-server-fts`), CLR needs `clr enabled` (and
@@ -45,7 +47,7 @@ logins, the TDE certificate and, when switched on, SQL Agent jobs and linked ser
 The engine, chunking, resume, sharding, validation, TLS and driver logic are covered by the
 automated suite (SQLite engine tests, a fake-TDS wire-level test, and a simulated pair of servers
 for `lift`). The SQL Server-specific parts (catalog queries, `INSERT BULK`, backup and restore
-T-SQL) are exercised by `tests/e2e/`, which runs in CI against two SQL Server 2022 Linux
-containers. Always Encrypted, CLR assemblies, full-text and Windows logins aren't available in
+T-SQL) are exercised by `tests/e2e/`, which runs in CI against real SQL Server Linux containers for
+2022 → 2022, 2019 → 2022, 2022 → 2025 and 2025 → 2025 (including `sync` and `lift`). Always Encrypted, CLR assemblies, full-text and Windows logins aren't available in
 those containers, so they're covered by unit tests only; try them in your environment before
 production use. See {doc}`/development/testing`.

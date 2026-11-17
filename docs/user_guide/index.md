@@ -8,7 +8,9 @@ The user guide covers each area of the package by topic. Each page stands on its
 
 configuration
 connections
+assess
 logical
+sync
 lift
 validation
 performance
@@ -22,7 +24,9 @@ limitations
 |---|---|
 | {doc}`configuration` | understand the config file, secrets and command-line overrides |
 | {doc}`connections` | choose a driver, set up TLS, reach a server through OpenShift |
+| {doc}`assess` | find what won't work on SQL Server on Linux / OpenShift before you migrate |
 | {doc}`logical` | understand chunking, identity handling, resume and scale-out |
+| {doc}`sync` | keep the application running during a logical migration and cut over in minutes |
 | {doc}`lift` | migrate tens of TB with minutes of downtime |
 | {doc}`validation` | prove the copy is correct, and read the report |
 | {doc}`performance` | make it faster: workers, stripes, storage, network |

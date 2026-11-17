@@ -280,7 +280,8 @@ class Assessor:
                           for f in scan_code(jobs)]
 
     def _filestream(self) -> None:
-        if self._one(self.src, "SELECT COUNT(*) FROM sys.database_files WHERE type = 2"):
+        # FILESTREAM filegroups are type FD (memory-optimized containers are FILESTREAM-type files too, FX)
+        if self._one(self.src, "SELECT COUNT(*) FROM sys.filegroups WHERE type = 'FD'"):
             fs_cols = self._q(self.src, """SELECT OBJECT_SCHEMA_NAME(object_id) + '.' + OBJECT_NAME(object_id) + '.' + name
                                           FROM sys.columns WHERE is_filestream = 1""")
             if self.lift and self.target_is_linux:

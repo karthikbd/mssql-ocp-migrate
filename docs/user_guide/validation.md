@@ -35,7 +35,13 @@ Any chunk whose checksum differs is **automatically compared row by row**, so ev
   history table and retention, change tracking per table, XML, spatial and full-text indexes;
 - row-level security policies and their predicates, certificates, module signatures and CDC
   capture instances;
-- SQL Agent jobs and linked servers, when copied.
+- SQL Agent jobs and linked servers, when copied;
+- the text of every view, procedure, function and trigger (ignoring line endings and trailing
+  spaces), its `ANSI_NULLS` / `QUOTED_IDENTIFIER` settings, disabled state and trigger order, and
+  object owners;
+- references in code that resolve on the source but not on the target (for example to a table
+  left out by `include` / `exclude`): SQL Server creates such code without complaint and fails when
+  it runs.
 
 Database-level items are compared for the scope being migrated: object permissions and properties
 of tables outside `include`/`exclude` are ignored. Each check follows its `copy_*` switch, so

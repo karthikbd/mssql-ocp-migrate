@@ -384,6 +384,13 @@ class CatalogMixin:
                 continue
             t.xml_indexes.append(XmlIndex(name=name, column=col, primary=using is None, using=using,
                                           secondary_type=sec if using else None))
+        if self._view_exists("sys.vector_indexes"):          # SQL Server 2025 (DiskANN, preview)
+            for oid, name in self.query("""SELECT vi.object_id, i.name FROM sys.vector_indexes vi
+                                           JOIN sys.indexes i ON i.object_id = vi.object_id AND i.index_id = vi.index_id"""):
+                t = tables.get(oid)
+                if t is not None:
+                    t.warnings.append(f"vector index {name} not recreated (create it with CREATE VECTOR INDEX "
+                                      "after the load)")
         for (oid, name, scheme, x1, y1, x2, y2, g1, g2, g3, g4, cpo, col) in self.query("""
                 SELECT si.object_id, si.name, si.tessellation_scheme,
                        st.bounding_box_xmin, st.bounding_box_ymin, st.bounding_box_xmax, st.bounding_box_ymax,

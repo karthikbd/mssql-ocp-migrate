@@ -14,6 +14,10 @@ Grant the least that each engine needs.
 | `migrate` with masked columns | `UNMASK` (the run stops without it, so masked values are never copied as real data) | |
 | `migrate` with `copy_certificates` | `CONTROL` on each certificate (to export the private key) | a database master key password in `master_key_password_env` when the target has no master key |
 
+| `assess` | `VIEW SERVER STATE`, `VIEW ANY DEFINITION`, read on `msdb` | `VIEW SERVER STATE` |
+| `sync` | `VIEW CHANGE TRACKING` on the tables (`ALTER` too if `sync_enable_change_tracking` turns it on) | `db_owner` |
+| `copy_custom_messages`, `copy_server_configuration`, `copy_server_triggers` | read on `sys.messages`, `sys.configurations`, `sys.server_triggers` | `sysadmin` or `serveradmin` (`sp_addmessage`, `sp_configure`); `CONTROL SERVER` for server triggers |
+
 Every server-level switch is optional: with less than `sysadmin`, turn those switches off and the
 run reports what it didn't copy.
 

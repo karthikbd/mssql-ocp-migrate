@@ -190,7 +190,7 @@ SOURCE = facts(15, "Enterprise Edition", 3, "Latin1_General_CI_AS", -300, "Windo
      [("Nightly export", "copy", "CmdExec")]),
     ("FROM msdb.dbo.sysalerts", [("Severity 17", 0, 17)]),
     ("WHERE s.database_name = ? AND s.subsystem = 'TSQL'", []),
-    ("WHERE type = 2", [(1,)]),
+    ("sys.filegroups WHERE type = 'FD'", [(1,)]),
     ("WHERE is_filestream = 1", [("dbo.Docs.Body",)]),
     ("is_published, is_merge_published", [(0, 1, 0, 0)]),
     ("FROM sys.database_mirroring", [(0,)]),

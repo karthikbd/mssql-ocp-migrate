@@ -329,14 +329,14 @@ ALTER INDEX IX_Order_Status_Off ON sales.[Order] DISABLE;
 GO
 CREATE TABLE dbo.Variant (Id int NOT NULL PRIMARY KEY, V sql_variant NULL);
 INSERT dbo.Variant VALUES
-    (1, CAST(42 AS int)), (2, CAST(42 AS bigint)), (3, CAST(42 AS tinyint)), (4, CAST(3.14159 AS decimal(9, 5))),
-    (5, CAST(1.0E-300 AS float)), (6, CAST(2.5 AS real)), (7, CAST(12.3456 AS money)), (8, CAST(1 AS bit)),
-    (9, CAST('2024-02-29T23:59:59.9999999' AS datetime2(7))), (10, CAST('2024-02-29T23:59:59.997' AS datetime)),
-    (11, CAST('2024-02-29' AS date)), (12, CAST('23:59:59.1234567' AS time(7))),
-    (13, CAST('2024-02-29T23:59:59.1234567+05:30' AS datetimeoffset(7))), (14, CAST(N'Ünïcødé 漢字' AS nvarchar(20))),
-    (15, CAST('ascii' COLLATE Latin1_General_CS_AS AS varchar(10))), (16, CAST(0x00FF10 AS varbinary(8))),
-    (17, CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier)), (18, CAST(N'it''s|piped' AS nvarchar(30))),
-    (19, NULL), (20, CAST('2024-02-29T10:00:00' AS smalldatetime));
+    (1, CAST(CAST(42 AS int) AS sql_variant)), (2, CAST(CAST(42 AS bigint) AS sql_variant)), (3, CAST(CAST(42 AS tinyint) AS sql_variant)), (4, CAST(CAST(3.14159 AS decimal(9, 5)) AS sql_variant)),
+    (5, CAST(CAST(1.0E-300 AS float) AS sql_variant)), (6, CAST(CAST(2.5 AS real) AS sql_variant)), (7, CAST(CAST(12.3456 AS money) AS sql_variant)), (8, CAST(CAST(1 AS bit) AS sql_variant)),
+    (9, CAST(CAST('2024-02-29T23:59:59.9999999' AS datetime2(7)) AS sql_variant)), (10, CAST(CAST('2024-02-29T23:59:59.997' AS datetime) AS sql_variant)),
+    (11, CAST(CAST('2024-02-29' AS date) AS sql_variant)), (12, CAST(CAST('23:59:59.1234567' AS time(7)) AS sql_variant)),
+    (13, CAST(CAST('2024-02-29T23:59:59.1234567+05:30' AS datetimeoffset(7)) AS sql_variant)), (14, CAST(CAST(N'Ünïcødé 漢字' AS nvarchar(20)) AS sql_variant)),
+    (15, CAST(CAST('ascii' COLLATE Latin1_General_CS_AS AS varchar(10)) AS sql_variant)), (16, CAST(CAST(0x00FF10 AS varbinary(8)) AS sql_variant)),
+    (17, CAST(CAST('6F9619FF-8B86-D011-B42D-00C04FC964FF' AS uniqueidentifier) AS sql_variant)), (18, CAST(CAST(N'it''s|piped' AS nvarchar(30)) AS sql_variant)),
+    (19, NULL), (20, CAST(CAST('2024-02-29T10:00:00' AS smalldatetime) AS sql_variant));
 GO
 CREATE TABLE dbo.Legacy (
     Id      int IDENTITY(1, 1) NOT FOR REPLICATION NOT NULL PRIMARY KEY,

@@ -79,6 +79,13 @@ It then reports **blockers**, which make `lift run` refuse to start unless you p
 | TDE without `transfer_tde_certificates` | the target couldn't read the backup |
 | S3 transport below SQL Server 2022 on either side | S3 URLs need 2022 |
 | S3 backup larger than ~12.5 TB compressed | 64 URLs × 10,000 parts × 20 MB per backup set |
+| FILESTREAM filegroup with a Linux target | SQL Server on Linux can't restore it |
+| Stretch Database enabled | retired, and not available on Linux |
+| target volume smaller than the data | the restore would run out of space |
+
+`plan` also runs the readiness assessment ({doc}`assess`): what SQL Server on Linux doesn't
+support (CLR `UNSAFE`, CmdExec jobs, `xp_cmdshell`, Windows users, ...) is listed as warnings,
+because the restore works but those parts of the application won't.
 
 It also gives warnings, for example SIMPLE recovery (no log catch-up is possible, so downtime
 equals the full backup and restore), Express edition, or existing log-backup jobs.
@@ -176,8 +183,14 @@ $ mssql-migrate lift cutover -c migrate.toml --confirm
 4. Undo replayed options. A READ_ONLY or SINGLE_USER setting made on the source for the cut-over
    is in the replayed log, so it's reverted on the target.
 5. Post-recovery steps:
-   - **SQL logins** used by the database's users are created with the **same SID and password
-     hash**, so no users are orphaned and no passwords need resetting (`copy_logins`);
+   - **logins** used by the database's users are created with the **same SID and password
+     hash**, so no users are orphaned and no passwords need resetting (`copy_logins`), with their
+     default language, user-defined server roles and server-level permissions; Windows logins and
+     groups are created `FROM WINDOWS`;
+   - the **database master key** is re-encrypted by the target's service master key (the step
+     Microsoft documents for moving a database with encrypted data), using the password in
+     `database_master_key_password_env`; without it, the run says what to do;
+   - **user-defined messages** the code raises are added (`copy_custom_messages`);
    - the **database owner** is set to the source's owner if that login exists;
    - **TRUSTWORTHY**, **DB_CHAINING** and **Service Broker** are set to match the source;
    - **orphaned users** are re-mapped to logins of the same name, and the rest are listed;
