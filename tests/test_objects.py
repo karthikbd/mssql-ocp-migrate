@@ -411,11 +411,11 @@ def test_server_level_catalog():
         "ALTER SERVER ROLE [dbcreator] ADD MEMBER [app_login]",
         "IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'monitoring' AND type = 'R') "
         "CREATE SERVER ROLE [monitoring]",
-        "GRANT VIEW SERVER STATE TO [monitoring]",
-        "GRANT IMPERSONATE ON LOGIN::[etl_login] TO [monitoring] WITH GRANT OPTION",
+        "EXEC master.sys.sp_executesql N'GRANT VIEW SERVER STATE TO [monitoring]'",
+        "EXEC master.sys.sp_executesql N'GRANT IMPERSONATE ON LOGIN::[etl_login] TO [monitoring] WITH GRANT OPTION'",
         "ALTER SERVER ROLE [monitoring] ADD MEMBER [app_login]",
-        "GRANT VIEW SERVER STATE TO [app_login]",
-        "GRANT IMPERSONATE ON LOGIN::[etl_login] TO [app_login] WITH GRANT OPTION"]
+        "EXEC master.sys.sp_executesql N'GRANT VIEW SERVER STATE TO [app_login]'",
+        "EXEC master.sys.sp_executesql N'GRANT IMPERSONATE ON LOGIN::[etl_login] TO [app_login] WITH GRANT OPTION'"]
     no_hash = fake_server([("WHERE sp.name = ?", [("S", "0x01", None, "master", 1, 0, 0)])])
     assert "CONTROL SERVER" in no_hash.server_logins([Principal("a", "SQL_USER", login="a")])[1][0]
     answers = [
@@ -447,7 +447,7 @@ def test_server_level_catalog():
         ("us_english", "EXEC sys.sp_addmessage @msgnum = 50010, @severity = 16, @msgtext = N'Error %d', "
                        "@lang = N'us_english', @with_log = TRUE"),
         ("Deutsch", "EXEC sys.sp_addmessage @msgnum = 50010, @severity = 16, @msgtext = N'Fehler %d', "
-                    "@lang = N'Deutsch', @with_log = FALSE")])]
+                    "@lang = N'Deutsch'")])]
     links = fake_server([
         ("FROM sys.servers WHERE is_linked = 1", [(1, "HQ", "SQL Server", "SQLNCLI", "hq", None, None, None,
                                                    1, 1, 1, 0, 1, None, 0, 0)]),

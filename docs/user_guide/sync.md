@@ -10,7 +10,7 @@ counterpart of `lift`'s log catch-up.
 $ mssql-migrate migrate -c migrate.toml           # records the change-tracking version first
 $ mssql-migrate sync -c migrate.toml              # any number of times
 $ mssql-migrate sync -c migrate.toml --follow 60  # keep catching up every minute
-# cut-over window: stop the application's writes, then
+# cut-over window: stop the writes, then
 $ mssql-migrate sync -c migrate.toml --final      # last pass, then validation
 ```
 

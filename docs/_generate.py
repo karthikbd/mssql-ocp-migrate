@@ -113,6 +113,19 @@ DESCRIPTIONS = {
                            "disabled and pointed at the target database.",
         "copy_linked_servers": "Copy linked servers and their options. Remote passwords can't be read, so "
                                "mapped logins are reported for you to re-enter.",
+        "copy_custom_messages": "Add the user-defined messages (``sp_addmessage``) the code raises by number, "
+                                "unless the target already has that number.",
+        "copy_server_configuration": "Apply the source's ``sp_configure`` values from a curated list (``clr "
+                                     "enabled``, ``nested triggers``, MAXDOP, ...; never ``xp_cmdshell``).",
+        "copy_server_triggers": "Copy server-level DDL and logon triggers, created disabled.",
+        "create_target_database": "Create the target database when it's missing, with the source database's "
+                                  "collation and containment.",
+        "assess": "Run the readiness assessment (:doc:`/user_guide/assess`) before migrating.",
+        "ignore_blockers": "Continue when the assessment finds blockers for the copy (version, edition, "
+                           "storage).",
+        "sync_enable_change_tracking": "Turn change tracking on for the source database and its tables before "
+                                       "the copy, for :doc:`/user_guide/sync`. This changes the source.",
+        "sync_retention_days": "Change-tracking retention set by ``sync_enable_change_tracking``.",
     },
     "ValidationConfig": {
         "mode": "``count``, ``checksum`` or ``full`` (see :doc:`/user_guide/validation`).",
@@ -154,6 +167,11 @@ DESCRIPTIONS = {
                                    "a newer SQL Server version; ``lift plan`` warns when it is.",
         "copy_agent_jobs": "Copy SQL Agent jobs that run in the lifted databases, created disabled.",
         "copy_linked_servers": "Copy linked servers (remote passwords must be re-entered).",
+        "copy_custom_messages": "Add the user-defined messages the database's code raises.",
+        "assess": "Run the readiness assessment in ``lift plan``.",
+        "database_master_key_password_env": "Environment variable with the password of the database master "
+                                            "key, used to re-encrypt it by the target's service master key "
+                                            "after recovery.",
         "verify_sample_rows": "Rows per checksum window in ``lift verify``.",
         "verify_windows_per_table": "Checksum windows per table in ``lift verify``.",
         "state_file": "Lift progress file (phase and restored LSN per database).",

@@ -2,6 +2,25 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
+## [0.4.0] - 2026-11-17
+
+Gaps found by comparing with dbatools, Microsoft's migration tooling (DMA, Azure DMS, SqlPackage)
+and Microsoft's list of features SQL Server on Linux doesn't support.
+
+### Added
+- `mssql-migrate assess`: readiness assessment for SQL Server on Linux / OpenShift (xp_cmdshell, OLE Automation, Windows paths, non-SQL Server linked servers and distributed queries, CLR `EXTERNAL_ACCESS`/`UNSAFE`, CmdExec/PowerShell/SSIS job steps, Agent alerts, Windows users, FILESTREAM, mirroring, merge replication, Stretch, EKM, secure enclaves), version and compatibility level, edition and size, server collation and time zone, `sp_configure` differences, target free space, cross-database references, encrypted modules, removed syntax. Also runs before `migrate` (copy blockers stop it; `ignore_blockers`) and in `lift plan`
+- `mssql-migrate sync`: change-tracking catch-up after `migrate`, `--follow`, and `--final` for the cut-over (foreign keys re-trusted, identities and sequences aligned, validation); `migrate` records the baseline version; `sync_enable_change_tracking`
+- Modules keep their `ANSI_NULLS` / `QUOTED_IDENTIFIER` settings; trigger firing order; object-level owners; disabled indexes (created disabled before the load)
+- `sql_variant` values keep their base type, precision, scale and collation
+- SQL Server 2025 `json` and `vector` columns; vector indexes reported
+- FILESTREAM columns created as `varbinary(max)` (no FILESTREAM on Linux); `ROWGUIDCOL` and `IDENTITY ... NOT FOR REPLICATION`; `ANSI_PADDING OFF` columns reported
+- Logins keep their default language, user-defined server roles and server-level permissions (`migrate` and `lift`; `lift` now copies Windows logins too)
+- Copied jobs keep the operator they notify; jobs with steps SQL Agent on Linux can't run are skipped and reported
+- `copy_custom_messages` (default on), `copy_server_configuration`, `copy_server_triggers`, `create_target_database`
+- `lift`: the database master key is re-encrypted by the target's service master key (`database_master_key_password_env`)
+- Validation compares module definitions, their settings, disabled state and trigger order, object owners, and reports references that no longer resolve on the target
+- End-to-end CI across SQL Server versions: 2022 → 2022, 2019 → 2022, 2022 → 2025, 2025 → 2025
+
 ## [0.3.0] - 2026-11-17
 
 ### Added

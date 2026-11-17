@@ -68,6 +68,12 @@ copy_cdc = true                # change data capture (needs sysadmin and SQL Age
 copy_logins = true             # SQL logins of mapped users, same SID and password hash (needs sysadmin)
 copy_agent_jobs = false        # SQL Agent jobs that run in this database, created DISABLED
 copy_linked_servers = false    # linked servers (remote passwords are never readable: re-enter them)
+copy_custom_messages = true    # user-defined messages the code raises (RAISERROR 50001...)
+copy_server_configuration = false   # apply the source's sp_configure values (curated list)
+copy_server_triggers = false   # server-level DDL/logon triggers, created disabled
+create_target_database = false # CREATE DATABASE with the source's collation if it's missing
+assess = true                  # readiness assessment first (mssql-migrate assess runs it alone)
+sync_enable_change_tracking = false   # for `mssql-migrate sync`: turns change tracking on at the SOURCE
 
 [validation]
 mode = "checksum"              # count | checksum | full
@@ -92,6 +98,7 @@ target_write_mb_s = 1500       # OCP storage write speed for the timeline estima
 update_statistics_after = false # sp_updatestats after cut-over (recommended when the target is a newer version)
 copy_agent_jobs = false        # SQL Agent jobs of the lifted databases (created disabled)
 copy_linked_servers = false
+database_master_key_password_env = "SOURCE_DB_MASTER_KEY_PASSWORD"   # re-encrypt the DMK by the target's SMK
 # path_map = { '\\\\nas01\\sqlbackups\\LOG' = "/var/opt/mssql/existing-logs" }  # existing log-backup jobs
 """
 

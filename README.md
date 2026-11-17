@@ -116,10 +116,22 @@ Each run writes `migration_report/report.html` (evidence for sign-off) and `repo
 | Copy | Splits each table into key ranges (`chunk_rows`, single or composite keys) and copies them in parallel with TDS bulk insert (`INSERT BULK`). Each chunk is one transaction that first clears its own range, so a retry or a resume never duplicates rows. Identity values are preserved, and the strategy is probed on the target at runtime. `datetime2(7)`, `time(7)`, `datetimeoffset(7)` and `datetime` are moved as ISO text, so no 100 ns ticks are lost. Geography, geometry and CLR types are moved as varbinary, hierarchyid as its path text, xml as nvarchar. |
 | Post-load | Nonclustered/unique indexes with the source's fill factor, lock options and ROW/PAGE compression; user-created statistics; check constraints and foreign keys `WITH CHECK` (trusted); identity reseed; then views/functions/procs/synonyms with a dependency-retry loop, triggers last (disabled ones stay disabled). |
 | Security and settings | Logins (same SID and password hash), certificates and signatures, database users and roles, role memberships, schema owners, `GRANT`/`DENY` down to column level, extended properties, row-level security, then every database option, scoped configuration and the compatibility level. |
-| Everything else | Temporal tables (versioning restored), memory-optimized and partitioned tables, masked/sparse/typed-XML/Always Encrypted columns, XML/spatial/full-text indexes, table types, CLR, Service Broker, DDL triggers, plan guides, change tracking and CDC; optionally SQL Agent jobs (disabled) and linked servers. |
+| Everything else | Temporal tables (versioning restored), memory-optimized and partitioned tables, masked/sparse/typed-XML/Always Encrypted/`sql_variant`/`json`/`vector` columns, XML/spatial/full-text indexes, table types, CLR, Service Broker, DDL triggers, plan guides, change tracking and CDC; modules keep their `ANSI_NULLS`/`QUOTED_IDENTIFIER` settings, trigger order and owners; user-defined messages; optionally SQL Agent jobs (disabled, with their operators), linked servers, server triggers and `sp_configure` values. |
 | Validate | See below. |
 
 `mssql-migrate schema -c migrate.toml -o schema.sql` writes the DDL without running it, for DBA review.
+
+## Readiness assessment and online cut-over
+
+`mssql-migrate assess` lists what won't work, or will behave differently, on SQL Server on Linux
+in OpenShift before you migrate: `xp_cmdshell` and OLE Automation in code, Windows paths, linked
+servers to non-SQL Server sources, CLR `UNSAFE`, CmdExec/PowerShell job steps, Windows users,
+FILESTREAM, mirroring, merge replication; plus version, edition, storage, server collation and time
+zone, and `sp_configure` differences. `migrate` and `lift plan` run it as well.
+
+`mssql-migrate sync` keeps the application running during a logical migration: after `migrate`,
+it applies the source's changes with change tracking, as often as you like, and `sync --final`
+in the cut-over window leaves only minutes of downtime.
 
 ## Validation (end-to-end testing)
 
@@ -200,9 +212,10 @@ docker compose -f tests/e2e/docker-compose.yml up -d
 MSSQL_E2E=1 pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v   # real SQL Server 2022
 ```
 
-CI runs the same end-to-end suite on every push against two SQL Server 2022 containers
-(`.github/workflows/e2e.yml`): a full logical migration of every object kind with validation, and
-a physical lift through seed, log catch-up, cut-over and verify.
+CI runs the same end-to-end suite on every push against SQL Server containers for 2022 → 2022,
+2019 → 2022, 2022 → 2025 and 2025 → 2025 (`.github/workflows/e2e.yml`): a full logical migration
+of every object kind with validation, an online `sync`, and a physical lift through seed, log
+catch-up, cut-over and verify.
 
 Releasing: bump the version in `pyproject.toml` and `src/mssql_ocp_migrate/__init__.py`, update
 `CHANGELOG.md`, push `main`, then publish a GitHub release `vX.Y.Z`. `.github/workflows/python-publish.yml`

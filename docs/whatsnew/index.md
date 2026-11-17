@@ -1,5 +1,34 @@
 # Release notes
 
+## 0.4.0 (November 2026)
+
+**Gaps found against other migration tools**: dbatools, Microsoft's migration tooling (DMA, Azure
+DMS, SqlPackage) and the list of features SQL Server on Linux doesn't support.
+
+- **Readiness assessment** ({doc}`/user_guide/assess`): `mssql-migrate assess` finds what won't
+  work, or will behave differently, on SQL Server on Linux in OpenShift (`xp_cmdshell`, OLE
+  Automation, Windows paths, non-SQL Server linked servers, CLR `UNSAFE`, CmdExec/PowerShell job
+  steps, Windows users, FILESTREAM, mirroring, merge replication, ...), plus version, edition,
+  storage, server collation and time zone, `sp_configure` differences and cross-database
+  references. `migrate` and `lift plan` run it too.
+- **Online catch-up** ({doc}`/user_guide/sync`): `mssql-migrate sync` applies the changes made
+  after the copy using change tracking, so the application keeps running and cut-over takes
+  minutes; `--final` re-trusts foreign keys, aligns identities and sequences, and validates.
+- **Exact behaviour of code:** modules keep their `ANSI_NULLS` / `QUOTED_IDENTIFIER` settings (a
+  procedure created with `ANSI_NULLS OFF` used to come back with `= NULL` behaving differently),
+  trigger firing order, object owners, and disabled indexes.
+- **Types:** `sql_variant` keeps each value's base type; SQL Server 2025 `json` and `vector`;
+  FILESTREAM columns become `varbinary(max)`; `ROWGUIDCOL` and `NOT FOR REPLICATION` are kept.
+- **Server objects:** user-defined messages the code raises; logins' default language, server roles
+  and server-level permissions; job operators; optional `sp_configure` alignment and server
+  triggers; jobs SQL Agent on Linux can't run are reported instead of failing.
+- **lift:** re-encrypts the database master key by the target's service master key, copies Windows
+  logins, server roles and permissions, and blocks FILESTREAM restores to Linux in `plan`.
+- **Validation** compares module definitions and their settings, and reports references that no
+  longer resolve on the target.
+- `create_target_database` creates the target with the source's collation.
+- The end-to-end suite runs in CI for 2022 → 2022, 2019 → 2022, 2022 → 2025 and 2025 → 2025.
+
 ## 0.3.0 (November 2026)
 
 **`migrate` now carries over everything inside a database that it used to leave behind**, and

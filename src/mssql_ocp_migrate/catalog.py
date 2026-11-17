@@ -1343,8 +1343,10 @@ class CatalogMixin:
             if int(cls) != 100 and not target:
                 continue
             verb = "GRANT" if str(state).startswith("GRANT") else str(state)
-            out.append(f"{verb} {perm}{on} TO {q(grantee)}" + (" WITH GRANT OPTION" if state == "GRANT_WITH_GRANT_OPTION"
-                                                                else ""))
+            stmt = f"{verb} {perm}{on} TO {q(grantee)}" + (" WITH GRANT OPTION" if state == "GRANT_WITH_GRANT_OPTION"
+                                                         else "")
+            # server-scope permissions can only be granted with master as the current database
+            out.append(f"EXEC master.sys.sp_executesql {lit(stmt)}")
         return out
 
     def unresolved_references(self) -> set:
@@ -1388,12 +1390,19 @@ class CatalogMixin:
         if not numbers:
             return []
         out: Dict[int, List[Tuple[int, str, str]]] = {}
+        # several languages share one message language (us_english and British are both 1033): take one,
+        # us_english first
         for mid, lang_id, lang, sev, logged, text in self.query(f"""
-                SELECT m.message_id, m.language_id, l.name, m.severity, m.is_event_logged, m.text
-                FROM sys.messages m JOIN sys.syslanguages l ON l.msglangid = m.language_id
+                SELECT m.message_id, m.language_id,
+                       (SELECT TOP (1) l.name FROM sys.syslanguages l WHERE l.msglangid = m.language_id
+                        ORDER BY CASE WHEN l.name = N'us_english' THEN 0 ELSE 1 END, l.langid),
+                       m.severity, m.is_event_logged, m.text
+                FROM sys.messages m
                 WHERE m.message_id IN ({', '.join(str(n) for n in sorted(numbers))})"""):
+            # @with_log is only allowed on the us_english version
             stmt = (f"EXEC sys.sp_addmessage @msgnum = {int(mid)}, @severity = {int(sev)}, @msgtext = {lit(text)}, "
-                    f"@lang = {lit(lang)}, @with_log = {'TRUE' if _bool(logged) else 'FALSE'}")
+                    f"@lang = {lit(lang)}" + (f", @with_log = {'TRUE' if _bool(logged) else 'FALSE'}"
+                                              if int(lang_id) == 1033 else ""))
             out.setdefault(int(mid), []).append((int(lang_id), str(lang), stmt))
         return [(mid, [(lang, stmt) for lid, lang, stmt in sorted(v, key=lambda x: x[0] != 1033)])
                 for mid, v in sorted(out.items())]

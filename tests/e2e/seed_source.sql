@@ -360,9 +360,11 @@ ALTER LOGIN e2e_app WITH DEFAULT_LANGUAGE = British;
 GO
 IF NOT EXISTS (SELECT 1 FROM sys.server_principals WHERE name = N'e2e_monitor') CREATE SERVER ROLE e2e_monitor;
 GO
+USE master;
 GRANT VIEW SERVER STATE TO e2e_monitor;
 ALTER SERVER ROLE e2e_monitor ADD MEMBER e2e_app;
 GRANT VIEW ANY DATABASE TO e2e_app;
+USE e2e_src;
 GO
 IF NOT EXISTS (SELECT 1 FROM msdb.dbo.sysoperators WHERE name = N'e2e dba')
     EXEC msdb.dbo.sp_add_operator @name = N'e2e dba', @enabled = 1, @email_address = N'dba@example.com';
