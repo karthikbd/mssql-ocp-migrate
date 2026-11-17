@@ -72,6 +72,8 @@ def migrated(tmp_path_factory):
     cfg.report_dir = str(tmp / "report")
     t0 = time.monotonic()
     run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
+    print("run warnings:", *run.warnings, sep="\n  ", flush=True)
+    print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
     from mssql_ocp_migrate import report
     print("report:", report.write(cfg, run=run))
     src = connect(conn_cfg("source", "e2e_src"))
@@ -152,13 +154,13 @@ def test_index_options_compression_and_statistics(migrated):
     a, b = both(migrated, """
         SELECT OBJECT_SCHEMA_NAME(i.object_id) + '.' + OBJECT_NAME(i.object_id), ISNULL(i.name, '(heap)'),
                i.fill_factor, i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
-               p.data_compression_desc
+               p.data_compression_desc, p.partition_number
         FROM sys.indexes i JOIN sys.partitions p ON p.object_id = i.object_id AND p.index_id = i.index_id
         JOIN sys.tables t ON t.object_id = i.object_id AND t.is_ms_shipped = 0
-        ORDER BY 1, 2""")
+        ORDER BY 1, 2, p.partition_number""")
     assert a == b
-    assert ("sales.Order", "IX_Order_Date", 80, True, False, True, False, "PAGE") in [tuple(r) for r in b]
-    assert ("dbo.EventLog", "(heap)", 0, False, False, True, True, "ROW") in [tuple(r) for r in b]
+    assert ("sales.Order", "IX_Order_Date", 80, True, False, True, False, "PAGE", 1) in [tuple(r) for r in b]
+    assert ("dbo.EventLog", "(heap)", 0, False, False, True, True, "ROW", 1) in [tuple(r) for r in b]
     a, b = both(migrated, """
         SELECT s.name, s.no_recompute, s.has_filter, s.filter_definition,
                STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY sc.stats_column_id)

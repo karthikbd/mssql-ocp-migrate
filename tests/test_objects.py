@@ -156,10 +156,14 @@ def test_security_ddl():
         ("BLOCK", "([rls].[fn]([Rep]))", "sales", "Order", "AFTER INSERT"),
         ("FILTER", "([rls].[fn]([Rep]))", "sales", "Other", None)])
     assert ddl.security_policy_sql(pol, {("sales", "Order")}) == (
-        "CREATE SECURITY POLICY [rls].[pol] ADD FILTER PREDICATE ([rls].[fn]([Rep])) ON [sales].[Order], "
-        "ADD BLOCK PREDICATE ([rls].[fn]([Rep])) ON [sales].[Order] AFTER INSERT "
+        "CREATE SECURITY POLICY [rls].[pol] ADD FILTER PREDICATE [rls].[fn]([Rep]) ON [sales].[Order], "
+        "ADD BLOCK PREDICATE [rls].[fn]([Rep]) ON [sales].[Order] AFTER INSERT "
         "WITH (STATE = OFF, SCHEMABINDING = ON)")
     assert ddl.security_policy_sql(pol, {("x", "y")}) is None
+    assert ddl.strip_outer_parens("(([s].[f]([a])))") == "[s].[f]([a])"
+    assert ddl.strip_outer_parens("([s].[f]([a]) )") == "[s].[f]([a])"
+    assert ddl.strip_outer_parens("([a])+([b])") == "([a])+([b])"
+    assert ddl.strip_outer_parens("([s].[f](N')('))") == "[s].[f](N')(')"
     assert ddl.policy_state_sql(pol) == "ALTER SECURITY POLICY [rls].[pol] WITH (STATE = ON)"
     assert ddl.certificate_sql(Certificate("C", None, "0x30", "0x1F", "pw'd")) == (
         "CREATE CERTIFICATE [C] FROM BINARY = 0x30 WITH PRIVATE KEY (BINARY = 0x1F, DECRYPTION BY PASSWORD = N'pw''d')")

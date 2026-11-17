@@ -442,6 +442,28 @@ def owner_sql(login: str) -> str:
             f"N' TO {q(login).replace(chr(39), chr(39) * 2)}'; EXEC (@s)")
 
 
+def strip_outer_parens(expr: str) -> str:
+    """'([rls].[fn]([Rep]))' -> '[rls].[fn]([Rep])': the catalog wraps predicates in parentheses,
+    which CREATE SECURITY POLICY doesn't accept around the function call."""
+    s = expr.strip()
+    while s.startswith("(") and s.endswith(")"):
+        depth, quote = 0, None
+        for i, ch in enumerate(s):
+            if quote:
+                if ch == quote:
+                    quote = None
+            elif ch in "'[":
+                quote = "'" if ch == "'" else "]"
+            elif ch == "(":
+                depth += 1
+            elif ch == ")":
+                depth -= 1
+                if depth == 0 and i != len(s) - 1:
+                    return s           # the first '(' closes before the end: not one wrapping pair
+        s = s[1:-1].strip()
+    return s
+
+
 def security_policy_sql(p: SecurityPolicy, tables: Optional[set] = None, enabled: bool = False) -> Optional[str]:
     """CREATE SECURITY POLICY, created disabled so it can't hide rows from validation; it's
     switched to the source's state at the very end (``policy_state_sql``)."""
@@ -449,7 +471,8 @@ def security_policy_sql(p: SecurityPolicy, tables: Optional[set] = None, enabled
     for ptype, definition, tsch, tname, op in p.predicates:
         if tables is not None and (tsch, tname) not in tables:
             continue
-        preds.append(f"ADD {ptype} PREDICATE {definition} ON {q(tsch)}.{q(tname)}" + (f" {op}" if op else ""))
+        preds.append(f"ADD {ptype} PREDICATE {strip_outer_parens(definition)} ON {q(tsch)}.{q(tname)}"
+                     + (f" {op}" if op else ""))
     if not preds:
         return None
     return (f"CREATE SECURITY POLICY {q(p.schema)}.{q(p.name)} {', '.join(preds)} "

@@ -258,6 +258,7 @@ class ChunkResult:
     seconds: float
     status: str = "done"        # done | failed
     error: Optional[str] = None
+    retried: Optional[str] = None   # error of an earlier attempt that a retry recovered from
 
 
 # ------------------------------------------------------------------ database-level objects

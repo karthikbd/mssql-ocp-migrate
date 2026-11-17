@@ -110,7 +110,7 @@ class SqlServer(CatalogMixin, Database):
         kl = ", ".join(q(k) for k in keys)
         rows = self.query(
             f"SELECT {kl} FROM (SELECT {kl}, ROW_NUMBER() OVER (ORDER BY {kl}) AS rn__ "
-            f"FROM {self.qualified(table)}{'' if table.memory_optimized else ' WITH (NOLOCK)'}) x "
+            f"FROM {self.qualified(table)}{' WITH (SNAPSHOT)' if table.memory_optimized else ' WITH (NOLOCK)'}) x "
             f"WHERE rn__ > 1 AND (rn__ - 1) % ? = 0 ORDER BY {kl}", [int(chunk_rows)])
         return [tuple(r) for r in rows]
 
@@ -141,15 +141,15 @@ class SqlServer(CatalogMixin, Database):
         order = ""
         if ordered and table.key_columns:
             order = " ORDER BY " + ", ".join(q(k) for k in table.key_columns)
-        sql = (f"SELECT {', '.join(self.select_exprs(table, cols))} FROM {self.qualified(table)} "
+        sql = (f"SELECT {', '.join(self.select_exprs(table, cols))} FROM {self._src(table)} "
                f"WHERE {where}{order}")
         return self.conn.stream(sql, params, batch)
 
     def count_rows(self, table: Table, chunk: Optional[Chunk] = None) -> int:
         if chunk is None:
-            return int(self.conn.scalar(f"SELECT COUNT_BIG(*) FROM {self.qualified(table)}"))
+            return int(self.conn.scalar(f"SELECT COUNT_BIG(*) FROM {self._src(table)}"))
         where, params = self._where(table, chunk)
-        return int(self.conn.scalar(f"SELECT COUNT_BIG(*) FROM {self.qualified(table)} WHERE {where}", params))
+        return int(self.conn.scalar(f"SELECT COUNT_BIG(*) FROM {self._src(table)} WHERE {where}", params))
 
     def _checksum_expr(self, c: Column) -> str:
         qc = q(c.name)
@@ -175,16 +175,17 @@ class SqlServer(CatalogMixin, Database):
         where, params = self._where(table, chunk)
         row = self.query(
             f"SELECT COUNT_BIG(*), SUM(CAST(BINARY_CHECKSUM({exprs}) AS bigint)), "
-            f"CHECKSUM_AGG(BINARY_CHECKSUM({exprs})) FROM {self.qualified(table)} WHERE {where}", params)[0]
+            f"CHECKSUM_AGG(BINARY_CHECKSUM({exprs})) FROM {self._src(table)} WHERE {where}", params)[0]
         return int(row[0]), (int(row[1] or 0), int(row[2] or 0))
 
     def random_key(self, table: Table, rnd) -> Optional[Tuple[Any, ...]]:
         """A random existing key, cheaply (TABLESAMPLE reads a few pages, not the table)."""
         kl = ", ".join(q(k) for k in table.key_columns)
         pct = min(100.0, max(0.0001, 100.0 * 2000 / max(table.row_count, 1)))
-        rows = self.query(f"SELECT TOP (1000) {kl} FROM {self.qualified(table)} TABLESAMPLE SYSTEM ({pct:.6f} PERCENT)")
+        rows = [] if table.memory_optimized else self.query(      # no TABLESAMPLE on memory-optimized tables
+            f"SELECT TOP (1000) {kl} FROM {self.qualified(table)} TABLESAMPLE SYSTEM ({pct:.6f} PERCENT)")
         if not rows:
-            rows = self.query(f"SELECT TOP (1) {kl} FROM {self.qualified(table)} ORDER BY {kl}")
+            rows = self.query(f"SELECT TOP (1) {kl} FROM {self._src(table)} ORDER BY {kl}")
         return tuple(rnd.choice(rows)) if rows else None
 
     def checksum_window(self, table: Table, start: Tuple[Any, ...], rows: int) -> Tuple[int, int, int]:
@@ -195,21 +196,26 @@ class SqlServer(CatalogMixin, Database):
         exprs = ", ".join(self._checksum_expr(c) for c in cols)
         sql = (f"SELECT COUNT_BIG(*), SUM(CAST(BINARY_CHECKSUM({exprs}) AS bigint)), "
                f"CHECKSUM_AGG(BINARY_CHECKSUM({exprs})) FROM (SELECT TOP ({int(rows)}) "
-               f"{', '.join(q(c.name) for c in cols)} FROM {self.qualified(table)} WHERE {where} "
+               f"{', '.join(q(c.name) for c in cols)} FROM {self._src(table)} WHERE {where} "
                f"ORDER BY {kl}) w")
         r = self.query(sql, params)[0]
         return int(r[0]), int(r[1] or 0), int(r[2] or 0)
 
+    def _src(self, table: Table) -> str:
+        """The table in a FROM clause. Memory-optimized tables need an isolation hint inside
+        explicit transactions (READ COMMITTED is only supported in autocommit)."""
+        return self.qualified(table) + (" WITH (SNAPSHOT)" if table.memory_optimized else "")
+
     def delete_range(self, table: Table, chunk: Chunk) -> None:
         where, params = self._where(table, chunk)
-        self.execute(f"DELETE FROM {self.qualified(table)} WHERE {where}", params)
+        self.execute(f"DELETE FROM {self._src(table)} WHERE {where}", params)
 
     def truncate(self, table: Table) -> None:
         try:
             self.execute(f"TRUNCATE TABLE {self.qualified(table)}")
         except Exception:      # referenced by a FK -> fall back to DELETE
             self.rollback()
-            self.execute(f"DELETE FROM {self.qualified(table)}")
+            self.execute(f"DELETE FROM {self._src(table)}")
 
     # -------------------------------------------------------------- identity
     def identity_current(self, table: Table) -> Optional[int]:

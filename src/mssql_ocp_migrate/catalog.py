@@ -1277,7 +1277,8 @@ class CatalogMixin:
             SELECT j.job_id, j.name, j.description, c.name, SUSER_SNAME(j.owner_sid), j.start_step_id,
                    j.notify_level_email, j.notify_email_operator_id
             FROM msdb.dbo.sysjobs j JOIN msdb.dbo.syscategories c ON c.category_id = j.category_id
-            WHERE EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps s WHERE s.job_id = j.job_id AND s.database_name = ?)""",
+            WHERE EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps s WHERE s.job_id = j.job_id AND s.database_name = ?)
+              AND c.name NOT LIKE N'REPL-%'      -- CDC and replication jobs: created by sp_cdc_enable_db etc.""",
             [database])
         out = []
         for job_id, name, desc, cat, owner, start, notify, operator in jobs:

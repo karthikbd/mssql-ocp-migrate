@@ -75,7 +75,7 @@ def _drop_connections() -> None:
 def copy_chunk(factory: Factory, table: Table, chunk: Chunk, batch_rows: int,
                tablock: bool, single_chunk: bool, max_retries: int) -> ChunkResult:
     """Copy one key range. Idempotent: the target range is cleared first in the same transaction."""
-    attempt = 0
+    attempt, first_error = 0, None
     while True:
         attempt += 1
         t0 = time.perf_counter()
@@ -88,13 +88,14 @@ def copy_chunk(factory: Factory, table: Table, chunk: Chunk, batch_rows: int,
                 tgt.delete_range(table, chunk)
             rows = tgt.bulk_load(table, src.read_rows(table, chunk, batch_rows), tablock)
             tgt.commit()
-            return ChunkResult(chunk.id, rows, time.perf_counter() - t0)
+            return ChunkResult(chunk.id, rows, time.perf_counter() - t0, retried=first_error)
         except Exception as exc:  # retry on a fresh connection
             try:
                 _db(factory, "target").rollback()
             except Exception:
                 pass
             _drop_connections()
+            first_error = first_error or f"{type(exc).__name__}: {exc}"
             if attempt > max_retries:
                 return ChunkResult(chunk.id, 0, time.perf_counter() - t0, "failed",
                                    f"{type(exc).__name__}: {exc}")
@@ -926,6 +927,11 @@ class Migrator:
                 done += 1
                 if r.status == "done":
                     done_rows += r.rows
+                    if r.retried:
+                        note = f"{r.chunk_id} succeeded after a retry; first attempt: {r.retried}"
+                        if note not in res.warnings:
+                            res.warnings.append(note)
+                        log.warning(note)
                 else:
                     res.tables[t.fqn].failed_chunks.append(r.chunk_id)
                     res.tables[t.fqn].errors.append(r.error or "")
