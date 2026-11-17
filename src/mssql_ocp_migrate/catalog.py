@@ -204,7 +204,9 @@ class CatalogMixin:
                 clr_udt, alias = True, utype
         elif is_udt:                     # alias type, e.g. CREATE TYPE dbo.Phone FROM varchar(20)
             base, alias = stype, utype
-        elif stype and utype != stype:   # built-in alias such as sysname = nvarchar(128)
+        elif stype and utype != stype and str(utype).lower() not in ("vector", "json"):
+            # built-in alias such as sysname = nvarchar(128); vector (2025) shares varbinary's
+            # system_type_id but is a type of its own
             base, alias = stype, None
         else:
             base, alias = utype, None

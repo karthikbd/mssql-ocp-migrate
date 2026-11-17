@@ -287,7 +287,7 @@ def test_broker_certificates_signatures_ddl_triggers_and_plan_guides(migrated):
               "SELECT name FROM sys.service_contracts WHERE name LIKE '//e2e/%'",
               "SELECT name, is_receive_enabled FROM sys.service_queues WHERE is_ms_shipped = 0",
               "SELECT name FROM sys.services WHERE name LIKE '//e2e/%'",
-              "SELECT name, is_disabled FROM sys.triggers WHERE parent_class = 0",
+              "SELECT name, is_disabled FROM sys.triggers WHERE parent_class = 0 ORDER BY name",
               "SELECT name, is_disabled, query_text FROM sys.plan_guides",
               "SELECT is_broker_enabled FROM sys.databases WHERE name = DB_NAME()"]:
         a, b = both(migrated, q)

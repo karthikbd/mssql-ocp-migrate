@@ -434,3 +434,13 @@ def test_sync_needs_a_recorded_version(tmp_path):
         Syncer(c, factory=lambda s, a: None).run()
     save_version(c, 7, SyncResult(from_version=3))
     assert load_version(c) == 7
+
+
+def test_vector_keeps_its_own_type_name():
+    from mssql_ocp_migrate.catalog import CatalogMixin as Catalog
+    row = (1, "Vec", "vector", 0, 0, "sys", "varbinary", 20, 0, 0, 1, 0, None, None, 0, None, 0, None, None, None,
+           0, 0, None, None, None, None, None, 0, None, None, 0, 0, 0, 0, 1, 3, "float32")
+    c = Catalog.column_from_row(row)
+    assert c.type_name == "vector" and ddl.type_sql(c) == "vector(3)"
+    row = (1, "Name", "sysname", 0, 0, "sys", "nvarchar", 256, 0, 0, 0) + row[11:]
+    assert Catalog.column_from_row(row).type_name == "nvarchar"
