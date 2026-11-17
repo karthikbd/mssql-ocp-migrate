@@ -110,7 +110,9 @@ Each run writes `migration_report/report.html` (evidence for sign-off) and `repo
 | Preflight | Reads the catalog: tables, columns, alias types, identity, computed, defaults, PK/unique/indexes (incl. filtered, INCLUDE, columnstore), FKs, checks, sequences, views, procs, functions, triggers, synonyms. Refuses a non-empty target unless told to `truncate` or `resume`. |
 | Schema | Creates schemas, alias types, sequences (at the source's current value), and tables with their primary keys. |
 | Copy | Splits each table into key ranges (`chunk_rows`, single or composite keys) and copies them in parallel with TDS bulk insert (`INSERT BULK`). Each chunk is one transaction that first clears its own range, so a retry or a resume never duplicates rows. Identity values are preserved, and the strategy is probed on the target at runtime. `datetime2(7)`, `time(7)`, `datetimeoffset(7)` and `datetime` are moved as ISO text, so no 100 ns ticks are lost. Geography, geometry and hierarchyid are moved as varbinary. |
-| Post-load | Nonclustered/unique indexes, check constraints and foreign keys `WITH CHECK` (trusted), identity reseed, then views/functions/procs/synonyms with a dependency-retry loop, triggers last (disabled ones stay disabled). |
+| Post-load | Nonclustered/unique indexes with the source's fill factor, lock options and ROW/PAGE compression; user-created statistics; check constraints and foreign keys `WITH CHECK` (trusted); identity reseed; then views/functions/procs/synonyms with a dependency-retry loop, triggers last (disabled ones stay disabled). |
+| Security and settings | Logins (same SID and password hash), certificates and signatures, database users and roles, role memberships, schema owners, `GRANT`/`DENY` down to column level, extended properties, row-level security, then every database option, scoped configuration and the compatibility level. |
+| Everything else | Temporal tables (versioning restored), memory-optimized and partitioned tables, masked/sparse/typed-XML/Always Encrypted columns, XML/spatial/full-text indexes, table types, CLR, Service Broker, DDL triggers, plan guides, change tracking and CDC; optionally SQL Agent jobs (disabled) and linked servers. |
 | Validate | See below. |
 
 `mssql-migrate schema -c migrate.toml -o schema.sql` writes the DDL without running it, for DBA review.
@@ -119,7 +121,7 @@ Each run writes `migration_report/report.html` (evidence for sign-off) and `repo
 
 | `validation.mode` | What is compared |
 |---|---|
-| `count` | Exact `COUNT_BIG(*)` per table, schema parity (columns, types, nullability, collation, identity, PK, indexes, FKs, checks), objects present, identity current values. |
+| `count` | Exact `COUNT_BIG(*)` per table, schema parity (columns, types, nullability, collation, identity, PK, indexes and their storage options, statistics, FKs, checks), objects present, identity current values, users/roles/permissions, extended properties and database settings. |
 | `checksum` (default) | The `count` checks, plus a per-chunk `COUNT` / `SUM(BINARY_CHECKSUM)` / `CHECKSUM_AGG` computed inside both servers (no data crosses the network; LOB, xml and CLR columns are hashed with SHA-256), plus an exact row-by-row SHA-256 comparison of a random `sample_full_pct` % of chunks. Any chunk whose checksum differs is compared row by row automatically, and the report lists the exact keys that are missing, extra or changed. |
 | `full` | Every row of every table is hashed with SHA-256 on both sides and compared by key. Keyless tables use an order-independent multiset digest, which also catches duplicate-row differences. |
 
@@ -174,13 +176,17 @@ Server must be reachable from the cluster (egress / firewall on 1433).
 
 - **Source:** `db_datareader` + `VIEW DEFINITION` (+ `VIEW DATABASE STATE` for size estimates).
 - **Target:** `db_owner` on the pre-created, empty database. The tool creates the schema, and bulk insert needs INSERT plus ALTER on each table. `ADMINISTER BULK OPERATIONS` is not needed, because no files are read on the server.
+- **Copying users (`copy_security`):** add `VIEW ANY DEFINITION` on both servers so login names resolve.
+- **Server level (`copy_logins`, `copy_cdc`, `copy_agent_jobs`, `copy_linked_servers`):** `sysadmin` on both servers; turn them off otherwise and create logins first.
+- **Masked columns:** `UNMASK` on the source.
 
-## Not migrated (reported as warnings)
+## Not migrated by `migrate` (reported as warnings)
 
-Logins, users and permissions; SQL Agent jobs; memory-optimized tables are created disk-based;
-system-versioned temporal tables arrive as two normal tables (re-enable `SYSTEM_VERSIONING`
-afterwards); partitioning, XML and spatial indexes, full-text; FileTables; `WITH ENCRYPTION`
-modules (their definitions cannot be read).
+Since 0.3.0 almost everything inside the database is copied. What's left can't be read over a
+connection: symmetric and asymmetric keys, database scoped credentials, linked-server remote
+passwords, contained-user passwords and `WITH ENCRYPTION` modules; and graph, FileTable,
+external and ledger tables, which are reported and left for `lift`. `lift` copies everything
+inside the database.
 
 ## Development
 

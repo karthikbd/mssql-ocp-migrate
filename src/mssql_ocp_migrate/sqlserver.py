@@ -7,11 +7,12 @@ import uuid
 from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
 from . import chunking
-from .adapter import Database, ModuleDef
+from .adapter import Database
+from .catalog import CatalogMixin
 from .config import ConnectionConfig
 from .ddl import q
 from .drivers import Connection, connect
-from .model import (CheckConstraint, Chunk, Column, ForeignKey, Index, LOB_LEGACY_TYPES, Table)
+from .model import Chunk, Column, LOB_LEGACY_TYPES, Table
 
 log = logging.getLogger(__name__)
 
@@ -23,7 +24,7 @@ _probe_lock = threading.Lock()
 _probe_cache: Dict[str, str] = {}
 
 
-class SqlServer(Database):
+class SqlServer(CatalogMixin, Database):
     def __init__(self, cfg: ConnectionConfig, label: str, autocommit: bool = True):
         self.cfg = cfg
         self.label = label
@@ -73,221 +74,6 @@ class SqlServer(Database):
         return self.conn.scalar("SELECT COL_LENGTH(?, ?)", [view, col]) is not None
 
     # ---------------------------------------------------------------- catalog
-    def list_schemas(self) -> List[str]:
-        rows = self.query(
-            "SELECT s.name FROM sys.schemas s WHERE s.schema_id > 4 AND s.schema_id < 16384 "
-            "AND s.name NOT IN ('guest','INFORMATION_SCHEMA','sys') ORDER BY s.name")
-        return [r[0] for r in rows]
-
-    def list_tables(self) -> List[Table]:
-        extra = []
-        if self._has_col("sys.tables", "temporal_type"):
-            extra.append("t.temporal_type")
-        else:
-            extra.append("0")
-        extra.append("t.is_memory_optimized" if self._has_col("sys.tables", "is_memory_optimized") else "0")
-        extra.append("t.is_filetable" if self._has_col("sys.tables", "is_filetable") else "0")
-        rows = self.query(f"""
-            SELECT t.object_id, s.name, t.name,
-                   ISNULL((SELECT SUM(p.rows) FROM sys.partitions p
-                           WHERE p.object_id = t.object_id AND p.index_id IN (0,1)), 0),
-                   ISNULL((SELECT SUM(a.total_pages) * 8 / 1024.0 FROM sys.partitions p
-                           JOIN sys.allocation_units a ON a.container_id = p.partition_id
-                           WHERE p.object_id = t.object_id), 0),
-                   {', '.join(extra)},
-                   (SELECT COUNT(DISTINCT p.partition_number) FROM sys.partitions p
-                    WHERE p.object_id = t.object_id)
-            FROM sys.tables t JOIN sys.schemas s ON s.schema_id = t.schema_id
-            WHERE t.is_ms_shipped = 0
-              AND NOT EXISTS (SELECT 1 FROM sys.extended_properties ep
-                              WHERE ep.major_id = t.object_id AND ep.minor_id = 0
-                                AND ep.name = 'microsoft_database_tools_support')
-            ORDER BY s.name, t.name""")
-        tables: Dict[int, Table] = {}
-        for oid, sch, name, nrows, mb, temporal, inmem, filetable, partitions in rows:
-            t = Table(schema=sch, name=name, row_count=int(nrows or 0), reserved_mb=float(mb or 0))
-            if temporal and int(temporal) == 2:
-                t.warnings.append("system-versioned temporal table: history table copied as a normal "
-                                  "table; re-enable SYSTEM_VERSIONING manually after cut-over")
-            if inmem:
-                t.warnings.append("memory-optimized table: created as a disk-based table")
-            if filetable:
-                t.warnings.append("FileTable: not supported, skipped by default")
-            if partitions and int(partitions) > 1:
-                t.warnings.append(f"partitioned ({partitions} partitions): created unpartitioned")
-            tables[oid] = t
-        if not tables:
-            return []
-        self._load_columns(tables)
-        self._load_indexes(tables)
-        self._load_fks(tables)
-        self._load_checks(tables)
-        for t in tables.values():
-            for c in t.columns:
-                if c.type_name.lower() == "sql_variant":
-                    t.warnings.append(f"column {c.name} is sql_variant: copied, verify base types")
-            if not t.key_columns:
-                t.warnings.append("no primary key / unique key: copied as one chunk (no parallelism, "
-                                  "no resume inside the table, validation by aggregate only)")
-        return list(tables.values())
-
-    def _load_columns(self, tables: Dict[int, Table]) -> None:
-        rows = self.query("""
-            SELECT c.object_id, c.name, ut.name, ut.is_user_defined, ut.is_assembly_type,
-                   SCHEMA_NAME(ut.schema_id), st.name,
-                   c.max_length, c.precision, c.scale, c.is_nullable, c.is_identity,
-                   CAST(ic.seed_value AS decimal(38,0)), CAST(ic.increment_value AS decimal(38,0)),
-                   c.is_computed, cc.definition, cc.is_persisted, c.collation_name,
-                   dc.name, dc.definition
-            FROM sys.columns c
-            JOIN sys.tables t ON t.object_id = c.object_id AND t.is_ms_shipped = 0
-            JOIN sys.types ut ON ut.user_type_id = c.user_type_id
-            LEFT JOIN sys.types st ON st.user_type_id = c.system_type_id
-            LEFT JOIN sys.identity_columns ic ON ic.object_id = c.object_id AND ic.column_id = c.column_id
-            LEFT JOIN sys.computed_columns cc ON cc.object_id = c.object_id AND cc.column_id = c.column_id
-            LEFT JOIN sys.default_constraints dc ON dc.object_id = c.default_object_id
-            ORDER BY c.object_id, c.column_id""")
-        for (oid, name, utype, is_udt, is_asm, uschema, stype, max_len, prec, scale, nullable,
-             is_ident, seed, inc, is_comp, comp_def, persisted, coll, dname, ddef) in rows:
-            t = tables.get(oid)
-            if t is None:
-                continue
-            if is_asm:                       # CLR: geography / geometry / hierarchyid / custom CLR
-                base, alias = utype, None
-            elif is_udt:                     # alias type, e.g. CREATE TYPE dbo.Phone FROM varchar(20)
-                base, alias = stype, utype
-            elif stype and utype != stype:   # built-in alias such as sysname = nvarchar(128)
-                base, alias = stype, None
-            else:
-                base, alias = utype, None
-            t.columns.append(Column(
-                name=name, type_name=base, max_length=int(max_len), precision=int(prec),
-                scale=int(scale), nullable=bool(nullable), is_identity=bool(is_ident),
-                identity_seed=int(seed) if seed is not None else None,
-                identity_increment=int(inc) if inc is not None else None,
-                is_computed=bool(is_comp), computed_definition=comp_def,
-                computed_persisted=bool(persisted), collation=coll,
-                default_name=dname, default_definition=ddef,
-                user_type=alias, user_type_schema=uschema if alias else None))
-
-    def _load_indexes(self, tables: Dict[int, Table]) -> None:
-        filt = "i.filter_definition" if self._has_col("sys.indexes", "filter_definition") else "NULL"
-        rows = self.query(f"""
-            SELECT i.object_id, i.index_id, i.name, i.type_desc, i.is_unique, i.is_primary_key,
-                   i.is_unique_constraint, {filt}, ic.key_ordinal, ic.is_descending_key,
-                   ic.is_included_column, c.name
-            FROM sys.indexes i
-            JOIN sys.tables t ON t.object_id = i.object_id AND t.is_ms_shipped = 0
-            JOIN sys.index_columns ic ON ic.object_id = i.object_id AND ic.index_id = i.index_id
-            JOIN sys.columns c ON c.object_id = ic.object_id AND c.column_id = ic.column_id
-            WHERE i.type IN (1, 2, 5, 6) AND i.is_hypothetical = 0
-            ORDER BY i.object_id, i.index_id, ic.is_included_column, ic.key_ordinal, ic.index_column_id""")
-        built: Dict[Tuple[int, int], Index] = {}
-        for (oid, iid, name, type_desc, uniq, is_pk, is_uc, fdef, key_ord, desc, incl, col) in rows:
-            t = tables.get(oid)
-            if t is None:
-                continue
-            ix = built.get((oid, iid))
-            if ix is None:
-                ix = Index(name=name, columns=[], unique=bool(uniq), clustered=type_desc.startswith("CLUSTERED"),
-                           is_primary_key=bool(is_pk), is_unique_constraint=bool(is_uc),
-                           filter_definition=fdef, type_desc=type_desc)
-                built[(oid, iid)] = ix
-                if is_pk:
-                    t.primary_key = ix
-                else:
-                    t.indexes.append(ix)
-            if incl:
-                ix.included.append(col)
-            elif "COLUMNSTORE" in type_desc and not key_ord:
-                ix.columns.append((col, False))
-            else:
-                ix.columns.append((col, bool(desc)))
-        other = self.query("""
-            SELECT OBJECT_SCHEMA_NAME(i.object_id), OBJECT_NAME(i.object_id), i.name, i.type_desc
-            FROM sys.indexes i JOIN sys.tables t ON t.object_id = i.object_id AND t.is_ms_shipped = 0
-            WHERE i.type IN (3, 4, 7)""")
-        by_name = {(t.schema, t.name): t for t in tables.values()}
-        for sch, tbl, iname, tdesc in other:
-            if (sch, tbl) in by_name:
-                by_name[(sch, tbl)].warnings.append(f"{tdesc} index {iname} not recreated (create manually)")
-
-    def _load_fks(self, tables: Dict[int, Table]) -> None:
-        rows = self.query("""
-            SELECT fk.parent_object_id, fk.object_id, fk.name,
-                   OBJECT_SCHEMA_NAME(fk.referenced_object_id), OBJECT_NAME(fk.referenced_object_id),
-                   fk.delete_referential_action_desc, fk.update_referential_action_desc,
-                   fk.is_disabled, fk.is_not_trusted, pc.name, rc.name
-            FROM sys.foreign_keys fk
-            JOIN sys.foreign_key_columns fkc ON fkc.constraint_object_id = fk.object_id
-            JOIN sys.columns pc ON pc.object_id = fkc.parent_object_id AND pc.column_id = fkc.parent_column_id
-            JOIN sys.columns rc ON rc.object_id = fkc.referenced_object_id AND rc.column_id = fkc.referenced_column_id
-            ORDER BY fk.object_id, fkc.constraint_column_id""")
-        built: Dict[int, ForeignKey] = {}
-        for poid, fkid, name, rs, rt, ondel, onupd, dis, untrusted, pcol, rcol in rows:
-            t = tables.get(poid)
-            if t is None:
-                continue
-            fk = built.get(fkid)
-            if fk is None:
-                fk = ForeignKey(name=name, columns=[], ref_schema=rs, ref_table=rt, ref_columns=[],
-                                on_delete=ondel, on_update=onupd, disabled=bool(dis),
-                                not_trusted=bool(untrusted))
-                built[fkid] = fk
-                t.foreign_keys.append(fk)
-            fk.columns.append(pcol)
-            fk.ref_columns.append(rcol)
-
-    def _load_checks(self, tables: Dict[int, Table]) -> None:
-        for poid, name, definition, dis in self.query(
-                "SELECT parent_object_id, name, definition, is_disabled FROM sys.check_constraints"):
-            t = tables.get(poid)
-            if t is not None:
-                t.checks.append(CheckConstraint(name=name, definition=definition, disabled=bool(dis)))
-
-    def list_modules(self) -> List[ModuleDef]:
-        out: List[ModuleDef] = []
-        # alias types
-        for sch, name, base, max_len, prec, scale, nullable in self.query("""
-                SELECT SCHEMA_NAME(t.schema_id), t.name, st.name, t.max_length, t.precision, t.scale, t.is_nullable
-                FROM sys.types t JOIN sys.types st ON st.user_type_id = t.system_type_id
-                WHERE t.is_user_defined = 1 AND t.is_assembly_type = 0 AND t.is_table_type = 0"""):
-            col = Column(name="x", type_name=base, max_length=max_len, precision=prec, scale=scale)
-            from .ddl import type_sql
-            out.append(ModuleDef("TYPE", sch, name,
-                                 f"CREATE TYPE {q(sch)}.{q(name)} FROM {type_sql(col)} "
-                                 f"{'NULL' if nullable else 'NOT NULL'}"))
-        if self._has_col("sys.sequences", "current_value"):
-            for sch, name, tname, start, inc, mn, mx, cyc, cache, cur in self.query("""
-                    SELECT SCHEMA_NAME(s.schema_id), s.name, TYPE_NAME(s.user_type_id),
-                           CAST(s.start_value AS decimal(38,0)), CAST(s.increment AS decimal(38,0)),
-                           CAST(s.minimum_value AS decimal(38,0)), CAST(s.maximum_value AS decimal(38,0)),
-                           s.is_cycling, s.cache_size, CAST(s.current_value AS decimal(38,0))
-                    FROM sys.sequences s"""):
-                restart = int(cur) + int(inc)
-                out.append(ModuleDef("SEQUENCE", sch, name,
-                                     f"CREATE SEQUENCE {q(sch)}.{q(name)} AS {tname} START WITH {restart} "
-                                     f"INCREMENT BY {int(inc)} MINVALUE {int(mn)} MAXVALUE {int(mx)} "
-                                     f"{'CYCLE' if cyc else 'NO CYCLE'}"
-                                     + (f" CACHE {cache}" if cache else "")))
-        kinds = {"V": "VIEW", "P": "PROCEDURE", "FN": "FUNCTION", "IF": "FUNCTION", "TF": "FUNCTION",
-                 "TR": "TRIGGER"}
-        for otype, sch, name, definition, parent, disabled in self.query("""
-                SELECT o.type, SCHEMA_NAME(o.schema_id), o.name, m.definition,
-                       CASE WHEN o.parent_object_id > 0
-                            THEN OBJECT_SCHEMA_NAME(o.parent_object_id) + '.' + OBJECT_NAME(o.parent_object_id) END,
-                       ISNULL(tr.is_disabled, 0)
-                FROM sys.objects o
-                JOIN sys.sql_modules m ON m.object_id = o.object_id
-                LEFT JOIN sys.triggers tr ON tr.object_id = o.object_id
-                WHERE o.is_ms_shipped = 0 AND o.type IN ('V','P','FN','IF','TF','TR')
-                ORDER BY o.create_date"""):
-            out.append(ModuleDef(kinds[otype.strip()], sch, name, definition, parent, bool(disabled)))
-        for sch, name, base in self.query(
-                "SELECT SCHEMA_NAME(schema_id), name, base_object_name FROM sys.synonyms"):
-            out.append(ModuleDef("SYNONYM", sch, name, f"CREATE SYNONYM {q(sch)}.{q(name)} FOR {base}"))
-        return out
-
     def table_exists(self, table: Table) -> bool:
         return self.conn.scalar("SELECT OBJECT_ID(?, 'U')", [f"{q(table.schema)}.{q(table.name)}"]) is not None
 
@@ -322,7 +108,7 @@ class SqlServer(Database):
         kl = ", ".join(q(k) for k in keys)
         rows = self.query(
             f"SELECT {kl} FROM (SELECT {kl}, ROW_NUMBER() OVER (ORDER BY {kl}) AS rn__ "
-            f"FROM {self.qualified(table)} WITH (NOLOCK)) x "
+            f"FROM {self.qualified(table)}{'' if table.memory_optimized else ' WITH (NOLOCK)'}) x "
             f"WHERE rn__ > 1 AND (rn__ - 1) % ? = 0 ORDER BY {kl}", [int(chunk_rows)])
         return [tuple(r) for r in rows]
 
@@ -380,7 +166,9 @@ class SqlServer(Database):
         return f"DATALENGTH({qc})"
 
     def checksum(self, table: Table, chunk: Chunk) -> Tuple[int, Any]:
-        cols = table.compare_columns
+        # Always Encrypted columns can't be used in expressions on the server; validation compares
+        # their ciphertext row by row instead (see validate._check_chunk)
+        cols = [c for c in table.compare_columns if not c.encrypted]
         exprs = ", ".join(self._checksum_expr(c) for c in cols)
         where, params = self._where(table, chunk)
         row = self.query(
@@ -399,7 +187,7 @@ class SqlServer(Database):
 
     def checksum_window(self, table: Table, start: Tuple[Any, ...], rows: int) -> Tuple[int, int, int]:
         """Checksum of the first ``rows`` rows at or after ``start`` in key order (server-side)."""
-        cols = table.compare_columns
+        cols = [c for c in table.compare_columns if not c.encrypted]
         where, params = self._where(table, Chunk(table.fqn, 0, lower=tuple(start)))
         kl = ", ".join(q(k) for k in table.key_columns)
         exprs = ", ".join(self._checksum_expr(c) for c in cols)
@@ -436,6 +224,10 @@ class SqlServer(Database):
     # ------------------------------------------------------------- bulk load
     def bulk_load(self, table: Table, batches: Iterable[Sequence[tuple]], tablock: bool) -> int:
         cols = table.insert_columns
+        tablock = tablock and not table.memory_optimized       # TABLOCK isn't allowed on memory-optimized tables
+        if table.has_encrypted and self.driver != "pytds":
+            raise RuntimeError(f"{table.fqn} has Always Encrypted columns: their ciphertext is copied with TDS "
+                               "bulk insert, which needs the bundled driver on the target (driver = \"pytds\")")
         identity = table.has_identity
         strategy = self._identity_strategy() if identity else ID_PLAIN_BULK
         if self.driver == "pyodbc":
@@ -623,6 +415,8 @@ def pytds_type(c: Column):
     """Map catalog metadata to the bundled driver's SQL type objects (used for INSERT BULK)."""
     from ._vendor.pytds import tds_types as T
     t = c.type_name.lower()
+    if c.encrypted:                 # ciphertext travels as varbinary (ALLOW_ENCRYPTED_VALUE_MODIFICATIONS)
+        return T.VarBinaryMaxType() if c.max_length == -1 else T.VarBinaryType(size=8000)
     if c.is_clr:
         return T.VarBinaryMaxType()
     if (t in ("datetime2", "datetimeoffset", "time") and c.scale > 6) or t == "datetime":

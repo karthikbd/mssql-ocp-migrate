@@ -181,6 +181,9 @@ $ mssql-migrate lift cutover -c migrate.toml --confirm
    - the **database owner** is set to the source's owner if that login exists;
    - **TRUSTWORTHY**, **DB_CHAINING** and **Service Broker** are set to match the source;
    - **orphaned users** are re-mapped to logins of the same name, and the rest are listed;
+   - optionally `sp_updatestats` (`update_statistics_after`), recommended when the target is a
+     newer SQL Server version: `lift plan` warns when it is, and the database keeps its
+     compatibility level until you raise it (capture a Query Store baseline first);
    - optionally `DBCC CHECKDB WITH PHYSICAL_ONLY` (`checkdb_after`; slow on 100 TB, so usually run
      later).
 

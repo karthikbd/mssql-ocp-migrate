@@ -20,7 +20,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from .adapter import Database
 from .config import Config
-from .model import Chunk, Table
+from .model import Chunk, DatabaseExtras, Table
 from .rowhash import RowHasher
 
 log = logging.getLogger(__name__)
@@ -78,18 +78,27 @@ class ValidationResult:
 
 
 # ------------------------------------------------------------------ comparisons
-def _schema_diff(s: Table, t: Optional[Table]) -> List[str]:
+def _schema_diff(s: Table, t: Optional[Table], options: bool = False, statistics: bool = False,
+                 m=None) -> List[str]:
+    """Differences between the source table ``s`` and the target table ``t``. ``m`` (the
+    MigrationConfig) switches on the checks for each feature the migration copies."""
     if t is None:
         return ["table missing on target"]
     out = []
     tcols = {c.name: c for c in t.columns}
+    attrs = ["type_name", "max_length", "precision", "scale", "nullable", "is_identity", "is_computed", "collation"]
+    if m is not None:
+        attrs += ["is_sparse", "is_column_set", "xml_schema", "xml_document", "encryption_type", "encryption_key"]
+        if m.copy_data_masking:
+            attrs.append("masking_function")
+        if m.restore_system_versioning and s.temporal:
+            attrs += ["generated_always", "is_hidden"]
     for c in s.columns:
         tc = tcols.pop(c.name, None)
         if tc is None:
             out.append(f"column {c.name} missing on target")
             continue
-        for attr in ("type_name", "max_length", "precision", "scale", "nullable", "is_identity",
-                     "is_computed", "collation"):
+        for attr in attrs:
             if getattr(c, attr) != getattr(tc, attr):
                 out.append(f"column {c.name}: {attr} {getattr(c, attr)!r} -> {getattr(tc, attr)!r}")
     out.extend(f"column {n} only on target" for n in tcols)
@@ -101,6 +110,119 @@ def _schema_diff(s: Table, t: Optional[Table]) -> List[str]:
                          ("foreign key", {f.name for f in s.foreign_keys}, {f.name for f in t.foreign_keys}),
                          ("check", {c.name for c in s.checks}, {c.name for c in t.checks})):
         out.extend(f"{kind} {n} missing on target" for n in sorted(sa - ta))
+    if options:
+        pairs = [(s.primary_key, t.primary_key)] if s.primary_key and t.primary_key else []
+        tix = {i.name: i for i in t.indexes}
+        pairs += [(i, tix[i.name]) for i in s.indexes if i.name in tix]
+        for si, ti in pairs:
+            a, b = si.options(), ti.options()
+            out.extend(f"index {si.name}: {k} {a[k]!r} -> {b[k]!r}" for k in a if a[k] != b[k])
+        has_ci = bool((s.primary_key and s.primary_key.clustered) or any(i.clustered for i in s.indexes))
+        if not has_ci and s.heap_compression != t.heap_compression:
+            out.append(f"heap compression {s.heap_compression} -> {t.heap_compression}")
+    if m is not None:
+        if m.memory_optimized == "keep" and (s.memory_optimized, s.durability) != (t.memory_optimized, t.durability):
+            out.append(f"memory optimized {s.memory_optimized}/{s.durability} -> {t.memory_optimized}/{t.durability}")
+        if m.restore_system_versioning and s.temporal and (
+                t.temporal is None or (t.temporal.history_schema, t.temporal.history_table, t.temporal.retention)
+                != (s.temporal.history_schema, s.temporal.history_table, s.temporal.retention)):
+            out.append("system versioning not enabled like the source" if t.temporal is None
+                       else "system versioning: history table or retention differs")
+        if (s.partition_scheme, s.partition_column) != (t.partition_scheme, t.partition_column):
+            out.append(f"heap partitioning {s.partition_scheme}({s.partition_column}) -> "
+                       f"{t.partition_scheme}({t.partition_column})")
+        for kind, sa, ta in (("XML index", {x.name for x in s.xml_indexes}, {x.name for x in t.xml_indexes}),
+                             ("spatial index", {x.name for x in s.spatial_indexes}, {x.name for x in t.spatial_indexes})):
+            out.extend(f"{kind} {n} missing on target" for n in sorted(sa - ta))
+        if m.copy_full_text and s.fulltext and (t.fulltext is None or
+                                                [c[0] for c in s.fulltext.columns] != [c[0] for c in t.fulltext.columns]):
+            out.append("full-text index missing or different on target")
+        if m.copy_change_tracking and s.change_tracking != t.change_tracking:
+            out.append(f"change tracking {s.change_tracking} -> {t.change_tracking}")
+    if statistics:
+        tst = {st.name: st for st in t.statistics}
+        for st in s.statistics:
+            other = tst.get(st.name)
+            if other is None:
+                out.append(f"statistics {st.name} missing on target")
+            elif other.columns != st.columns:
+                out.append(f"statistics {st.name}: columns {st.columns} -> {other.columns}")
+    return out
+
+
+def extras_diff(cfg: Config, src: DatabaseExtras, tgt: DatabaseExtras) -> List[str]:
+    """Database-level differences: settings, users/roles, memberships, schema owners, permissions,
+    extended properties. ``src`` is already scoped to the tables and code being migrated."""
+    m, out = cfg.migration, []
+    if m.copy_database_settings:
+        want = (src.settings.compatibility_level if m.compatibility_level == "source"
+                else int(m.compatibility_level) if m.compatibility_level.isdigit() else None)
+        if want and want != tgt.settings.compatibility_level:
+            out.append(f"compatibility level {want} -> {tgt.settings.compatibility_level}")
+        if src.settings.read_committed_snapshot != tgt.settings.read_committed_snapshot:
+            out.append(f"READ_COMMITTED_SNAPSHOT {src.settings.read_committed_snapshot} -> "
+                       f"{tgt.settings.read_committed_snapshot}")
+        if src.settings.snapshot_isolation != tgt.settings.snapshot_isolation:
+            out.append(f"ALLOW_SNAPSHOT_ISOLATION {src.settings.snapshot_isolation} -> "
+                       f"{tgt.settings.snapshot_isolation}")
+        for key, val in src.settings.options.items():
+            if key in tgt.settings.options and tgt.settings.options[key] != val:
+                out.append(f"database option {key} {val} -> {tgt.settings.options[key]}")
+        for key, val in src.settings.scoped_configurations.items():
+            if key in tgt.settings.scoped_configurations and tgt.settings.scoped_configurations[key] != val:
+                out.append(f"scoped configuration {key} {val} -> {tgt.settings.scoped_configurations[key]}")
+        if bool(src.settings.change_tracking) != bool(tgt.settings.change_tracking) and m.copy_change_tracking:
+            out.append(f"change tracking {src.settings.change_tracking} -> {tgt.settings.change_tracking}")
+        if src.settings.query_store != tgt.settings.query_store:
+            out.append(f"Query Store {src.settings.query_store} -> {tgt.settings.query_store}")
+    if m.copy_security:
+        tp = {p.name: p for p in tgt.principals}
+        for p in src.principals:
+            if p.name not in tp:
+                out.append(f"{'role' if p.kind == 'ROLE' else 'user'} {p.name} missing on target")
+            elif (p.kind == "ROLE") != (tp[p.name].kind == "ROLE"):
+                out.append(f"principal {p.name}: {p.kind} -> {tp[p.name].kind}")
+        present = set(tp)
+        tm = set(tgt.role_members)
+        out.extend(f"{mem} is not a member of role {r} on target" for r, mem in src.role_members
+                   if (r, mem) not in tm and mem in present)
+        for sch, own in src.schema_owners.items():
+            if tgt.schema_owners.get(sch) != own and own in present:
+                out.append(f"schema {sch}: owner {own} -> {tgt.schema_owners.get(sch, 'dbo')}")
+        tk = {p.key for p in tgt.permissions}
+        for p in src.permissions:
+            if p.key not in tk and p.grantee in present | {"public"}:
+                what = p.securable_class.lower() + (f" {p.schema}" if p.schema else "") + (
+                    f".{p.securable}" if p.securable else "") + (f"({p.column})" if p.column else "")
+                out.append(f"{p.state} {p.permission} on {what} to {p.grantee} missing on target")
+    if m.copy_row_level_security:
+        tpol = {(p.schema, p.name): p for p in tgt.security_policies}
+        for p in src.security_policies:
+            other = tpol.get((p.schema, p.name))
+            if other is None:
+                out.append(f"security policy {p.schema}.{p.name} missing on target")
+                continue
+            missing = set(p.predicates) - set(other.predicates)
+            out.extend(f"security policy {p.schema}.{p.name}: {x[0].lower()} predicate on {x[2]}.{x[3]} missing"
+                       for x in sorted(missing))
+    if m.copy_certificates:
+        tc = {c.name for c in tgt.certificates}
+        out.extend(f"certificate {c.name} missing on target" for c in src.certificates if c.name not in tc)
+        ts = {(s.schema, s.name, s.certificate, s.counter) for s in tgt.signatures}
+        out.extend(f"signature on {s.schema}.{s.name} by {s.certificate} missing on target"
+                   for s in src.signatures if (s.schema, s.name, s.certificate, s.counter) not in ts)
+    if m.copy_cdc:
+        tcdc = {c.capture_instance for c in tgt.cdc_tables}
+        out.extend(f"change data capture instance {c.capture_instance} missing on target"
+                   for c in src.cdc_tables if c.capture_instance not in tcdc)
+    if m.copy_extended_properties:
+        te = {e.key: e.value for e in tgt.extended_properties}
+        for e in src.extended_properties:
+            where = ".".join(n for _, n in e.level) or "database"
+            if e.key not in te:
+                out.append(f"extended property {e.name} on {where} missing on target")
+            elif te[e.key] != e.value:
+                out.append(f"extended property {e.name} on {where}: value differs")
     return out
 
 
@@ -152,6 +274,8 @@ def _check_chunk(cfg: Config, factory, table: Table, chunk: Chunk, full: bool) -
     from .engine import _db, _drop_connections
     try:
         src, tgt = _db(factory, "source"), _db(factory, "target")
+        if table.has_encrypted:
+            full = True       # encrypted columns can't be checksummed on the server: compare the ciphertext
         if not full:
             sc, ss = src.checksum(table, chunk)
             tc, ts = tgt.checksum(table, chunk)
@@ -171,6 +295,24 @@ class Validator:
         self.factory = factory
         self.progress = progress or (lambda m: log.info(m))
 
+    def _server_diffs(self, src: Database, tgt: Database) -> List[str]:
+        """SQL Agent jobs and linked servers, when the migration copies them."""
+        m, out = self.cfg.migration, []
+        query = getattr(tgt, "query", None)
+        if query is None:
+            return out
+        try:
+            if m.copy_agent_jobs and hasattr(src, "agent_jobs"):
+                have = {r[0] for r in query("SELECT name FROM msdb.dbo.sysjobs")}
+                out += [f"SQL Agent job {j[0]} missing on target"
+                        for j in src.agent_jobs(self.cfg.source.database, self.cfg.target.database) if j[0] not in have]
+            if m.copy_linked_servers and hasattr(src, "linked_servers"):
+                have = {r[0] for r in query("SELECT name FROM sys.servers WHERE is_linked = 1")}
+                out += [f"linked server {x[0]} missing on target" for x in src.linked_servers() if x[0] not in have]
+        except Exception as exc:
+            out.append(f"server objects not comparable: {exc}")
+        return out
+
     def run(self, tables: List[Table], chunks: Dict[str, List[Chunk]],
             mode: Optional[str] = None) -> ValidationResult:
         """Validate ``tables`` using the given chunk plan; ``mode`` overrides ``validation.mode``."""
@@ -180,22 +322,33 @@ class Validator:
         res = ValidationResult(mode=mode)
         src, tgt = self.factory("source", True), self.factory("target", True)
         try:
+            mc = self.cfg.migration
             tgt_tables = {t.fqn: t for t in tgt.list_tables()} if v.compare_schema else {}
             for t in tables:
                 tc = TableCheck(t.fqn)
                 tc.source_rows = src.count_rows(t)
                 tc.target_rows = tgt.count_rows(t) if tgt.table_exists(t) else -1
                 if v.compare_schema:
-                    tc.schema_diffs = _schema_diff(t, tgt_tables.get(t.fqn))
+                    tc.schema_diffs = _schema_diff(t, tgt_tables.get(t.fqn), mc.copy_index_options,
+                                                   mc.copy_statistics, mc)
                 res.tables[t.fqn] = tc
-            if v.compare_schema and self.cfg.migration.copy_programmable_objects:
-                smods = {(m.kind, m.fqn) for m in src.list_modules()}
+            from .engine import Migrator
+            src_modules = Migrator(self.cfg, self.factory, self.progress)._modules(src)
+            if v.compare_schema and mc.copy_programmable_objects:
+                smods = {(m.kind, m.fqn) for m in src_modules}
                 tmods = {(m.kind, m.fqn) for m in tgt.list_modules()}
                 res.object_diffs = [f"{k} {n} missing on target" for k, n in sorted(smods - tmods)]
                 for t in tables:
                     a, b = src.identity_current(t), tgt.identity_current(t)
                     if a is not None and b is not None and a != b:
                         res.object_diffs.append(f"identity {t.fqn}: current value {a} -> {b}")
+            if v.compare_schema and (mc.copy_security or mc.copy_extended_properties or mc.copy_database_settings):
+                se, te = src.database_extras(), tgt.database_extras()
+                if se is not None and te is not None:
+                    from .engine import scoped_extras
+                    res.object_diffs += extras_diff(self.cfg, scoped_extras(se, tables, src_modules), te)
+            if v.compare_schema:
+                res.object_diffs += self._server_diffs(src, tgt)
         finally:
             src.close()
             tgt.close()

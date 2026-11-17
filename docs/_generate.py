@@ -63,6 +63,56 @@ DESCRIPTIONS = {
         "plan_wait_seconds": "How long a shard waits for shard 1 to write the plan.",
         "target_recovery_simple": "Switch the target to SIMPLE recovery during the load so bulk inserts "
                                   "are minimally logged; the original model is restored at the end.",
+        "copy_index_options": "Recreate each index and primary key with the source's fill factor, "
+                              "``PAD_INDEX``, ``IGNORE_DUP_KEY``, row/page lock options and ``ROW``/``PAGE`` "
+                              "(or columnstore archive) compression; heaps keep their compression too.",
+        "index_sort_in_tempdb": "Build indexes after the load with ``SORT_IN_TEMPDB = ON`` (faster when "
+                                "tempdb is on separate storage).",
+        "index_maxdop": "``MAXDOP`` for index builds after the load; ``0`` uses the server setting.",
+        "index_online": "Build indexes with ``ONLINE = ON`` (Enterprise or Developer edition only).",
+        "copy_statistics": "Recreate user-created statistics (``CREATE STATISTICS``), including filters "
+                           "and ``NORECOMPUTE``.",
+        "statistics_fullscan": "Build the copied statistics ``WITH FULLSCAN`` instead of sampling.",
+        "copy_extended_properties": "Copy extended properties (``MS_Description`` and others) on the "
+                                    "database, schemas, tables, columns, views, code, indexes and constraints.",
+        "copy_security": "Copy database users, roles, role memberships, schema owners and "
+                         "``GRANT``/``DENY`` permissions. Users mapped to logins need those logins on the "
+                         "target first (see :doc:`/user_guide/security`).",
+        "copy_database_settings": "Make the target's compatibility level, read-committed snapshot and "
+                                  "snapshot isolation match the source.",
+        "compatibility_level": "``source`` (keep the source's level), ``target`` (keep the target's "
+                               "default) or a number such as ``150``.",
+        "copy_data_masking": "Recreate dynamic data masks (``MASKED WITH``). The source login must have "
+                             "``UNMASK`` or the run stops before copying, so masked values are never copied "
+                             "as if they were real data.",
+        "copy_row_level_security": "Recreate security policies. They are created with ``STATE = OFF`` and "
+                                   "switched to the source's state after validation. The run stops if a "
+                                   "policy hides rows from the source login.",
+        "restore_system_versioning": "For temporal tables, copy the history table, then add the period and "
+                                     "turn ``SYSTEM_VERSIONING`` back on with the source's retention.",
+        "memory_optimized": "``keep`` recreates memory-optimized tables (a memory-optimized filegroup is "
+                            "added to the target when missing); ``disk`` creates them as ordinary tables.",
+        "partition_filegroups": "``primary`` maps every partition to ``PRIMARY``; ``source`` keeps the "
+                                "source's filegroups, which must already exist on the target.",
+        "copy_full_text": "Copy full-text catalogs, stoplists and indexes (skipped with a warning when the "
+                          "target has no full-text feature).",
+        "copy_service_broker": "Copy message types, contracts, queues, services, routes, remote service "
+                               "bindings and event notifications, and enable the broker if the source has it on.",
+        "copy_certificates": "Copy certificates with their private keys, certificate-mapped users and "
+                             "module signatures.",
+        "master_key_password_env": "Environment variable with the password for a new database master key, "
+                                   "needed when certificates are copied and the target has none.",
+        "trust_clr_assemblies": "Add each CLR assembly's hash with ``sp_add_trusted_assembly`` before "
+                                "creating it (needed under ``clr strict security``; requires sysadmin).",
+        "copy_change_tracking": "Enable change tracking on the database and on the same tables.",
+        "copy_cdc": "Enable change data capture on the same tables with the same capture instances and "
+                    "captured columns (requires sysadmin and SQL Agent).",
+        "copy_logins": "Create the SQL and Windows logins used by the database's users, with the same SID "
+                       "and password hash, disabled when disabled on the source.",
+        "copy_agent_jobs": "Copy SQL Agent jobs whose steps run in this database. They are created "
+                           "disabled and pointed at the target database.",
+        "copy_linked_servers": "Copy linked servers and their options. Remote passwords can't be read, so "
+                               "mapped logins are reported for you to re-enter.",
     },
     "ValidationConfig": {
         "mode": "``count``, ``checksum`` or ``full`` (see :doc:`/user_guide/validation`).",
@@ -100,6 +150,10 @@ DESCRIPTIONS = {
         "target_master_key_password_env": "Environment variable with the password for a new master key "
                                           "on the target (only needed when it has none).",
         "checkdb_after": "Run ``DBCC CHECKDB WITH PHYSICAL_ONLY`` after cut-over.",
+        "update_statistics_after": "Run ``sp_updatestats`` after cut-over. Recommended when the target is "
+                                   "a newer SQL Server version; ``lift plan`` warns when it is.",
+        "copy_agent_jobs": "Copy SQL Agent jobs that run in the lifted databases, created disabled.",
+        "copy_linked_servers": "Copy linked servers (remote passwords must be re-entered).",
         "verify_sample_rows": "Rows per checksum window in ``lift verify``.",
         "verify_windows_per_table": "Checksum windows per table in ``lift verify``.",
         "state_file": "Lift progress file (phase and restored LSN per database).",

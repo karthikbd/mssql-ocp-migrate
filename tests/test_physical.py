@@ -207,7 +207,7 @@ class FakeConn:
         if "dm_exec_requests" in sql:
             return [(42.0, 120000)]
         if "ProductMajorVersion" in sql:
-            return [(16,)] if self.side == "src" else [(16,)]
+            return [(16,)] if self.side == "src" else [(getattr(w, "target_major", 16),)]
         if "SERVERPROPERTY('Edition')" in sql:
             return [("Enterprise Edition",)]
         if "recovery_model_desc" in sql:
@@ -319,6 +319,20 @@ def test_plan_flags_blockers_and_uses_measured_ratio(tmp_path):
     assert p.compression_ratio == 3.0 and p.ratio_source.startswith("measured")
     assert any("third-party" in b for b in p.blockers)
     assert any("S3 limit" in b for b in p.blockers)                     # ~33 TB compressed > 12.5 TB
+
+
+def test_newer_target_version_warns_and_statistics_refresh_runs(tmp_path):
+    w = World()
+    w.target_major = 17
+    lift = Lift(make_cfg(tmp_path, update_statistics_after=True), progress=lambda m: None,
+                connect_fn=fake_connect(w))
+    p = lift.plan()[0]
+    assert any("newer SQL Server version (16 -> 17)" in x and "compatibility level 150" in x for x in p.warnings)
+    assert not p.blockers
+    lift.seed("Sales")
+    lift.cutover("Sales")
+    assert "EXEC [Sales].sys.sp_updatestats" in w.target_log
+    assert "statistics updated (sp_updatestats)" in lift.state.db("Sales")["post_notes"]
 
 
 def test_cli_lift_ag_script_and_cutover_guard(tmp_path, capsys):

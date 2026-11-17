@@ -1,5 +1,47 @@
 # Release notes
 
+## 0.3.0 (November 2026)
+
+**`migrate` now carries over everything inside a database that it used to leave behind**, and
+validation checks each item:
+
+- **index storage options:** fill factor, `PAD_INDEX`, `IGNORE_DUP_KEY`, row and page lock options,
+  and `ROW`/`PAGE`/columnstore-archive compression on every index, primary key and heap;
+- faster index builds after the load: `SORT_IN_TEMPDB`, `MAXDOP` and optional `ONLINE`;
+- **user-created statistics**, with filters and `NORECOMPUTE` (optionally `FULLSCAN`);
+- **extended properties** (`MS_Description` and others) on every kind of object;
+- **security:** database users, roles, role owners and memberships, schema owners (empty schemas
+  included) and `GRANT`/`DENY` down to column level. Users whose login is missing on the target
+  are reported, not silently skipped;
+- **database settings:** compatibility level (keep the source's, the target's, or a chosen
+  level), read-committed snapshot and snapshot isolation;
+- a warning when the database default collation differs;
+- **columns:** dynamic data masks (the run stops if the source login can't `UNMASK`), sparse
+  columns and column sets, typed XML (`DOCUMENT`/`CONTENT` with its schema collection), CLR
+  user-defined types, and Always Encrypted columns copied as ciphertext;
+- **tables:** system-versioned temporal tables (history copied, versioning and retention
+  restored), memory-optimized tables (filegroup created on the target; or `memory_optimized =
+  "disk"`), partitioned tables and indexes with per-partition compression, change tracking and
+  change data capture;
+- **indexes:** XML (primary and secondary), spatial and full-text indexes with their catalogs and
+  stoplists;
+- **database objects:** user-defined table types, XML schema collections, partition functions and
+  schemes, CLR assemblies, procedures, functions, triggers and aggregates, Always Encrypted keys,
+  rules and defaults with their bindings, database DDL triggers, plan guides, and Service Broker
+  message types, contracts, queues, services, routes and event notifications;
+- **security:** certificates with private keys, certificate users and module signatures,
+  row-level security policies (switched on after validation; the run stops if a policy hides
+  source rows), database owner, every database option and scoped configuration, Query Store;
+- **server level:** the logins used by the database's users (same SID and password hash), and
+  optionally SQL Agent jobs (created disabled) and linked servers;
+- `schema_script` writes all of this in run order, and skipped tables (graph, FileTable,
+  external, ledger) are reported as errors instead of being dropped silently.
+
+`lift` gains `update_statistics_after` (`sp_updatestats` after cut-over), `copy_agent_jobs` and
+`copy_linked_servers`, and `lift plan` warns when the target is a newer SQL Server version. The
+end-to-end suite now runs in CI against two SQL Server 2022 containers. Each new copy step has a `copy_*` switch that also
+controls its validation; all default to on.
+
 ## 0.2.1 (November 2026)
 
 Supply-chain hardening, no functional changes:

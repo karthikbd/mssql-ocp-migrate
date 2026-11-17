@@ -439,6 +439,10 @@ class Lift:
         if tv < sv:
             p.blockers.append(f"target SQL Server major version {tv} is older than source {sv}: "
                               "a backup can only be restored on the same or a newer version")
+        if tv > sv:
+            p.warnings.append(f"target is a newer SQL Server version ({sv} -> {tv}): the database keeps "
+                              f"compatibility level {int(compat)}. Set update_statistics_after = true, and capture "
+                              "a Query Store baseline before raising the compatibility level")
         if state != "ONLINE":
             p.blockers.append(f"source database state is {state}")
         if recovery == "SIMPLE":
@@ -666,12 +670,51 @@ class Lift:
             if self.lift.checkdb_after:
                 LongOp(self.cfg.target, self.progress, connect_fn=self._connect).run(
                     f"DBCC CHECKDB ({q(tdb)}) WITH PHYSICAL_ONLY, NO_INFOMSGS", f"{tdb} CHECKDB")
+            if self.lift.copy_agent_jobs or self.lift.copy_linked_servers:
+                notes += self.copy_server_objects(s, t, db, tdb)
+            if self.lift.update_statistics_after:
+                LongOp(self.cfg.target, self.progress, connect_fn=self._connect).run(
+                    f"EXEC {q(tdb)}.sys.sp_updatestats", f"{tdb} update statistics")
+                notes.append("statistics updated (sp_updatestats)")
         finally:
             s.close()
             t.close()
         self.state.update(db, phase="recovered", post_notes=notes)
         for n in notes:
             self.progress(f"{db}: {n}")
+
+    def copy_server_objects(self, s, t, db: str, tdb: str) -> List[str]:
+        """SQL Agent jobs with steps in the database (created disabled) and linked servers."""
+        from .catalog import CatalogMixin
+
+        class _Catalog(CatalogMixin):
+            def __init__(self, conn):
+                self.conn = conn
+
+            def query(self, sql, params=None):
+                return self.conn.query(sql, params)
+
+            def _has_col(self, view, col):
+                return self.conn.scalar("SELECT COL_LENGTH(?, ?)", [view, col]) is not None
+
+        cat, notes = _Catalog(s), []
+        if self.lift.copy_agent_jobs:
+            for name, stmts, warns in cat.agent_jobs(db, tdb):
+                notes += warns
+                if t.scalar("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = ?", [name]):
+                    continue
+                for sql in stmts:
+                    t.execute(sql)
+                notes.append(f"created SQL Agent job {name} (disabled: enable it at cut-over)")
+        if self.lift.copy_linked_servers:
+            for name, stmts, warns in cat.linked_servers():
+                notes += warns
+                if t.scalar("SELECT COUNT(*) FROM sys.servers WHERE name = ?", [name]):
+                    continue
+                for sql in stmts:
+                    t.execute(sql)
+                notes.append(f"created linked server {name}")
+        return notes
 
     def copy_logins(self, s, t, db: str) -> List[str]:
         """SQL logins mapped to users of this database, with the same SID and password hash

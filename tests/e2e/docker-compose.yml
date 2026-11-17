@@ -8,6 +8,7 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
       MSSQL_PID: Developer
+      MSSQL_AGENT_ENABLED: "true"      # SQL Agent jobs and CDC
     user: root                       # so both containers can write the shared backup volume
     volumes: ["mig:/var/opt/mssql/mig"]
     ports: ["14331:1433"]
@@ -17,6 +18,7 @@ services:
       ACCEPT_EULA: "Y"
       MSSQL_SA_PASSWORD: "Str0ng!Passw0rd"
       MSSQL_PID: Developer
+      MSSQL_AGENT_ENABLED: "true"
       MSSQL_COLLATION: SQL_Latin1_General_CP1_CI_AS
     user: root
     volumes: ["mig:/var/opt/mssql/mig"]   # same share, same path: plays the NFS PV in OpenShift

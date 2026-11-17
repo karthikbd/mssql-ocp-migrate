@@ -70,6 +70,32 @@ class MigrationConfig:
     plan_file: str = ""                  # chunk plan shared by all shards (RWX volume)
     plan_wait_seconds: int = 7200
     target_recovery_simple: bool = False  # minimally-logged bulk load; original model restored at the end
+    # what else to carry over besides tables, data and code (0.3.0)
+    copy_index_options: bool = True       # fill factor, PAD_INDEX, IGNORE_DUP_KEY, lock options, compression
+    index_sort_in_tempdb: bool = True     # index builds after the load sort in tempdb
+    index_maxdop: int = 0                 # 0 = server default
+    index_online: bool = False            # ONLINE = ON (Enterprise/Developer only)
+    copy_statistics: bool = True          # user-created statistics (CREATE STATISTICS)
+    statistics_fullscan: bool = False     # build copied statistics WITH FULLSCAN instead of sampled
+    copy_extended_properties: bool = True # MS_Description and other extended properties
+    copy_security: bool = True            # database users, roles, memberships, schema owners, GRANT/DENY
+    copy_database_settings: bool = True   # compatibility level, read-committed snapshot, snapshot isolation
+    compatibility_level: str = "source"   # source | target | a number such as "150"
+    copy_data_masking: bool = True        # dynamic data masking (needs UNMASK on the source to read real values)
+    copy_row_level_security: bool = True  # security policies (created after the load, with the source's state)
+    restore_system_versioning: bool = True  # temporal tables: re-enable SYSTEM_VERSIONING after the load
+    memory_optimized: str = "keep"        # keep | disk (create memory-optimized tables as disk-based)
+    partition_filegroups: str = "primary" # primary (all partitions on PRIMARY) | source (same filegroups)
+    copy_full_text: bool = True           # full-text catalogs, stoplists and indexes
+    copy_service_broker: bool = True      # message types, contracts, queues, services, routes, bindings
+    copy_certificates: bool = True        # certificates (with private keys) and module signatures
+    master_key_password_env: str = "TARGET_DB_MASTER_KEY_PASSWORD"   # for the target database master key
+    trust_clr_assemblies: bool = False    # sp_add_trusted_assembly on targets with 'clr strict security'
+    copy_change_tracking: bool = True
+    copy_cdc: bool = True                 # change data capture configuration (needs sysadmin and SQL Agent)
+    copy_logins: bool = True              # server logins the database users map to (same SID and password)
+    copy_agent_jobs: bool = False         # SQL Agent jobs with steps in this database (created disabled)
+    copy_linked_servers: bool = False     # linked server definitions (remote passwords can't be copied)
 
 
 @dataclass
@@ -107,6 +133,9 @@ class LiftConfig:
     transfer_tde_certificates: bool = True
     target_master_key_password_env: str = "TARGET_MASTER_KEY_PASSWORD"
     checkdb_after: bool = False         # DBCC CHECKDB WITH PHYSICAL_ONLY after recovery (long on 100 TB)
+    update_statistics_after: bool = False  # sp_updatestats after recovery (recommended on a newer version)
+    copy_agent_jobs: bool = False       # SQL Agent jobs with steps in the database (created disabled)
+    copy_linked_servers: bool = False   # linked server definitions (remote passwords can't be copied)
     verify_sample_rows: int = 100_000   # rows per sampled checksum window in `lift verify`
     verify_windows_per_table: int = 3
     state_file: str = "lift_state.json"
@@ -180,6 +209,15 @@ class Config:
             raise ConfigError("migration.executor must be auto, thread or process")
         if m.shard_count < 1 or not 0 <= m.shard_index < m.shard_count:
             raise ConfigError("migration.shard_index must be in 0..shard_count-1")
+        m.compatibility_level = str(m.compatibility_level).strip().lower()
+        if m.compatibility_level not in ("source", "target") and not m.compatibility_level.isdigit():
+            raise ConfigError("migration.compatibility_level must be source, target or a number such as 150")
+        if m.memory_optimized not in ("keep", "disk"):
+            raise ConfigError("migration.memory_optimized must be keep or disk")
+        if m.partition_filegroups not in ("primary", "source"):
+            raise ConfigError("migration.partition_filegroups must be primary or source")
+        if m.index_maxdop < 0:
+            raise ConfigError("migration.index_maxdop must be >= 0")
         if m.workers < 1 or m.chunk_rows < 1 or m.batch_rows < 1:
             raise ConfigError("workers, chunk_rows and batch_rows must be >= 1")
         if v.mode not in ("count", "checksum", "full"):

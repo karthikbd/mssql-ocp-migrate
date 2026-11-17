@@ -9,6 +9,13 @@ Grant the least that each engine needs.
 | `migrate` | `db_datareader` + `VIEW DEFINITION` (+ `VIEW DATABASE STATE` for size estimates) | `db_owner` on the pre-created, empty database (creates the schema; bulk insert needs INSERT and ALTER) |
 | `lift` | `db_backupoperator` on each database + read on `msdb` backup history + `VIEW SERVER STATE`; `sysadmin` (or CONTROL on the certificate) for TDE and logins | `dbcreator`; `sysadmin` to create logins, a master key and certificates |
 | `validate` | `db_datareader` | `db_datareader` |
+| `migrate` with `copy_security` | add `VIEW ANY DEFINITION` (server level), so users' login names can be resolved | add `VIEW ANY DEFINITION`, so existing logins can be found; `db_owner` covers creating users and roles, granting, and `ALTER DATABASE` for the settings |
+| `migrate` with `copy_logins`, `copy_cdc`, `copy_agent_jobs`, `copy_linked_servers` or `trust_clr_assemblies` | `sysadmin` (password hashes, msdb, linked-server catalog) | `sysadmin` (`CREATE LOGIN`, `sp_cdc_enable_db`, msdb jobs, `sp_addlinkedserver`, `sp_add_trusted_assembly`) |
+| `migrate` with masked columns | `UNMASK` (the run stops without it, so masked values are never copied as real data) | |
+| `migrate` with `copy_certificates` | `CONTROL` on each certificate (to export the private key) | a database master key password in `master_key_password_env` when the target has no master key |
+
+Every server-level switch is optional: with less than `sysadmin`, turn those switches off and the
+run reports what it didn't copy.
 
 `ADMINISTER BULK OPERATIONS` is **not** needed: TDS bulk insert streams rows over the connection
 and never reads files on the server.

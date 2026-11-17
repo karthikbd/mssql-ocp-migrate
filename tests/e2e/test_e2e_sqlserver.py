@@ -54,6 +54,9 @@ def migrated(tmp_path_factory):
     c.close()
     cfg = Config(source=conn_cfg("source", "e2e_src"), target=conn_cfg("target", "e2e_tgt"))
     cfg.migration.workers = int(E("E2E_WORKERS", "6"))
+    cfg.migration.copy_agent_jobs = True
+    cfg.migration.copy_linked_servers = True
+    os.environ.setdefault("TARGET_DB_MASTER_KEY_PASSWORD", "E2e!TargetMasterKey1")
     cfg.migration.chunk_rows = 50_000
     cfg.migration.state_file = str(tmp / "state.json")
     cfg.validation.sample_full_pct = 10
@@ -133,6 +136,162 @@ def test_constraints_trusted_and_objects_created(migrated):
                           "WHERE object_id = OBJECT_ID('sales.[Order]') ORDER BY name")
     assert a == b
     assert int(tgt.scalar("SELECT CAST(current_value AS bigint) FROM sys.sequences WHERE name='InvoiceNo'")) >= 1001
+
+
+def test_index_options_compression_and_statistics(migrated):
+    a, b = both(migrated, """
+        SELECT OBJECT_SCHEMA_NAME(i.object_id) + '.' + OBJECT_NAME(i.object_id), ISNULL(i.name, '(heap)'),
+               i.fill_factor, i.is_padded, i.ignore_dup_key, i.allow_row_locks, i.allow_page_locks,
+               p.data_compression_desc
+        FROM sys.indexes i JOIN sys.partitions p ON p.object_id = i.object_id AND p.index_id = i.index_id
+        JOIN sys.tables t ON t.object_id = i.object_id AND t.is_ms_shipped = 0
+        ORDER BY 1, 2""")
+    assert a == b
+    assert ("sales.Order", "IX_Order_Date", 80, True, False, True, False, "PAGE") in [tuple(r) for r in b]
+    assert ("dbo.EventLog", "(heap)", 0, False, False, True, True, "ROW") in [tuple(r) for r in b]
+    a, b = both(migrated, """
+        SELECT s.name, s.no_recompute, s.has_filter, s.filter_definition,
+               STRING_AGG(c.name, ',') WITHIN GROUP (ORDER BY sc.stats_column_id)
+        FROM sys.stats s JOIN sys.stats_columns sc ON sc.object_id = s.object_id AND sc.stats_id = s.stats_id
+        JOIN sys.columns c ON c.object_id = sc.object_id AND c.column_id = sc.column_id
+        WHERE s.user_created = 1 GROUP BY s.name, s.no_recompute, s.has_filter, s.filter_definition""")
+    assert a == b and len(a) == 1
+
+
+def test_extended_properties_security_and_settings(migrated):
+    a, b = both(migrated, """
+        SELECT ep.class, ep.name, CAST(ep.value AS nvarchar(4000)),
+               CASE ep.class WHEN 3 THEN SCHEMA_NAME(ep.major_id) WHEN 0 THEN NULL ELSE OBJECT_NAME(ep.major_id) END,
+               CASE ep.class WHEN 1 THEN COL_NAME(ep.major_id, ep.minor_id)
+                             WHEN 7 THEN (SELECT i.name FROM sys.indexes i
+                                          WHERE i.object_id = ep.major_id AND i.index_id = ep.minor_id) END
+        FROM sys.extended_properties ep
+        WHERE ep.class IN (0, 3) OR (ep.class IN (1, 7) AND ep.major_id IN (
+            SELECT object_id FROM sys.objects WHERE is_ms_shipped = 0))
+        ORDER BY 1, 2, 4, 5""")
+    assert a == b and len(a) == 7
+    a, b = both(migrated, """
+        SELECT dp.name, dp.type, dp.default_schema_name FROM sys.database_principals dp
+        WHERE dp.name IN ('reporting', 'etl_svc') ORDER BY 1""")
+    assert a == b and len(a) == 2
+    a, b = both(migrated, """
+        SELECT r.name, m.name FROM sys.database_role_members rm
+        JOIN sys.database_principals r ON r.principal_id = rm.role_principal_id
+        JOIN sys.database_principals m ON m.principal_id = rm.member_principal_id
+        WHERE m.name = 'etl_svc' ORDER BY 1""")
+    assert a == b and len(a) == 2
+    a, b = both(migrated, """
+        SELECT p.class_desc, p.permission_name, p.state_desc, g.name,
+               CASE p.class WHEN 1 THEN OBJECT_NAME(p.major_id) WHEN 3 THEN SCHEMA_NAME(p.major_id) END,
+               CASE WHEN p.class = 1 THEN COL_NAME(p.major_id, p.minor_id) END
+        FROM sys.database_permissions p JOIN sys.database_principals g ON g.principal_id = p.grantee_principal_id
+        WHERE g.name IN ('reporting', 'etl_svc') AND p.permission_name <> 'CONNECT' ORDER BY 1, 2, 4, 5""")
+    assert a == b and len(a) == 5
+    a, b = both(migrated, "SELECT p.name FROM sys.schemas s JOIN sys.database_principals p "
+                          "ON p.principal_id = s.principal_id WHERE s.name = 'audit'")
+    assert [tuple(r) for r in a] == [tuple(r) for r in b] == [("etl_svc",)]
+    a, b = both(migrated, "SELECT compatibility_level, is_read_committed_snapshot_on, snapshot_isolation_state "
+                          "FROM sys.databases WHERE name = DB_NAME()")
+    assert [tuple(r) for r in a] == [tuple(r) for r in b] == [(150, True, 1)]
+
+
+def rows(r):
+    return [tuple(x) for x in r]
+
+
+def test_masking_sparse_column_set_and_typed_xml(migrated):
+    a, b = both(migrated, """
+        SELECT c.name, c.is_sparse, c.is_column_set, mc.masking_function, xsc.name, c.is_xml_document
+        FROM sys.columns c LEFT JOIN sys.masked_columns mc ON mc.object_id = c.object_id AND mc.column_id = c.column_id
+        LEFT JOIN sys.xml_schema_collections xsc ON xsc.xml_collection_id = c.xml_collection_id AND c.xml_collection_id > 1
+        WHERE c.object_id = OBJECT_ID('dbo.Contact') ORDER BY c.column_id""")
+    assert rows(a) == rows(b) and len(a) == 8
+    a, b = both(migrated, "SELECT COUNT(*), COUNT(Fax), SUM(CASE WHEN Note IS NULL THEN 0 ELSE 1 END), "
+                          "CHECKSUM_AGG(CHECKSUM(Email, Phone, Rep)) FROM dbo.Contact")
+    assert rows(a) == rows(b) and a[0][0] == 3000
+
+
+def test_row_level_security_on_after_load(migrated):
+    q = """SELECT p.name, p.is_enabled, p.is_schema_bound, sp.predicate_type_desc, sp.operation_desc,
+                  OBJECT_NAME(sp.target_object_id)
+           FROM sys.security_policies p JOIN sys.security_predicates sp ON sp.object_id = p.object_id ORDER BY 4"""
+    a, b = both(migrated, q)
+    assert rows(a) == rows(b) and len(a) == 2 and all(r[1] for r in b)
+
+
+def test_table_type_partitioning_and_compression(migrated):
+    a, b = both(migrated, "SELECT TYPE_NAME(user_type_id), is_table_type FROM sys.types WHERE name = 'IdList'")
+    assert rows(a) == rows(b) == [("IdList", True)]
+    a, b = both(migrated, """
+        SELECT i.name, p.partition_number, p.data_compression_desc, p.rows
+        FROM sys.partitions p JOIN sys.indexes i ON i.object_id = p.object_id AND i.index_id = p.index_id
+        WHERE p.object_id = OBJECT_ID('dbo.Ledger') ORDER BY 1, 2""")
+    assert rows(a) == rows(b) and len(a) == 8
+    a, b = both(migrated, "SELECT pf.name, pf.boundary_value_on_right, CAST(rv.value AS date) FROM sys.partition_functions pf "
+                          "JOIN sys.partition_range_values rv ON rv.function_id = pf.function_id ORDER BY 3")
+    assert rows(a) == rows(b) and len(a) == 3
+
+
+def test_xml_spatial_temporal_memory_optimized(migrated):
+    a, b = both(migrated, "SELECT name, type_desc FROM sys.indexes WHERE type IN (3, 4) ORDER BY 1")
+    assert rows(a) == rows(b) and len(a) == 3
+    a, b = both(migrated, """
+        SELECT t.temporal_type_desc, OBJECT_NAME(t.history_table_id), t.history_retention_period,
+               t.history_retention_period_unit_desc FROM sys.tables t WHERE t.name = 'Price'""")
+    assert rows(a) == rows(b) and a[0][0] == "SYSTEM_VERSIONED_TEMPORAL_TABLE"
+    a, b = both(migrated, "SELECT COUNT(*) FROM dbo.PriceHistory")
+    assert rows(a) == rows(b) and a[0][0] > 0
+    a, b = both(migrated, "SELECT is_memory_optimized, durability_desc FROM sys.tables WHERE name = 'Session'")
+    assert rows(a) == rows(b) == [(True, "SCHEMA_AND_DATA")]
+    a, b = both(migrated, "SELECT COUNT(*), SUM(CAST(UserId AS bigint)) FROM dbo.Session")
+    assert rows(a) == rows(b) and a[0][0] == 5000
+    a, b = both(migrated, "SELECT name, type_desc, bucket_count FROM sys.hash_indexes "
+                          "WHERE object_id = OBJECT_ID('dbo.Session')")
+    assert rows(a) == rows(b) == [("PK_Session", "NONCLUSTERED HASH", 16384)]
+
+
+def test_broker_certificates_signatures_ddl_triggers_and_plan_guides(migrated):
+    for q in ["SELECT name FROM sys.service_message_types WHERE name LIKE '//e2e/%'",
+              "SELECT name FROM sys.service_contracts WHERE name LIKE '//e2e/%'",
+              "SELECT name, is_receive_enabled FROM sys.service_queues WHERE is_ms_shipped = 0",
+              "SELECT name FROM sys.services WHERE name LIKE '//e2e/%'",
+              "SELECT name, is_disabled FROM sys.triggers WHERE parent_class = 0",
+              "SELECT name, is_disabled, query_text FROM sys.plan_guides",
+              "SELECT is_broker_enabled FROM sys.databases WHERE name = DB_NAME()"]:
+        a, b = both(migrated, q)
+        assert rows(a) == rows(b) and a, q
+    a, b = both(migrated, "SELECT c.name, OBJECT_NAME(cp.major_id) FROM sys.crypt_properties cp "
+                          "JOIN sys.certificates c ON c.thumbprint = cp.thumbprint")
+    assert rows(a) == rows(b) == [("SignCert", "usp_Signed")]
+    a, b = both(migrated, "SELECT dp.name, dp.type_desc FROM sys.database_principals dp WHERE dp.name = 'signer'")
+    assert rows(a) == rows(b)
+    a, b = both(migrated, "EXEC dbo.usp_Count")  # the table-type parameter defaults to an empty table
+    assert rows(a) == rows(b)
+
+
+def test_change_tracking_cdc_and_scoped_configuration(migrated):
+    for q in ["SELECT retention_period, retention_period_units_desc, is_auto_cleanup_on "
+              "FROM sys.change_tracking_databases WHERE database_id = DB_ID()",
+              "SELECT OBJECT_NAME(object_id), is_track_columns_updated_on FROM sys.change_tracking_tables",
+              "SELECT CAST(value AS int) FROM sys.database_scoped_configurations WHERE name = 'MAXDOP'",
+              "SELECT is_cdc_enabled FROM sys.databases WHERE name = DB_NAME()",
+              "SELECT capture_instance, supports_net_changes FROM cdc.change_tables"]:
+        a, b = both(migrated, q)
+        assert rows(a) == rows(b) and a, q
+    a, b = both(migrated, "SELECT column_name FROM cdc.captured_columns ORDER BY column_ordinal")
+    assert rows(a) == rows(b) and len(a) == 3
+
+
+def test_login_job_and_linked_server(migrated):
+    _, run, src, tgt = migrated
+    q = "SELECT sp.name, sp.sid, sp.is_disabled FROM sys.server_principals sp WHERE sp.name = 'e2e_app'"
+    a, b = src.query(q), tgt.query(q)
+    assert a[0][1] == b[0][1]                       # same SID: the user maps without remapping
+    assert tgt.query("SELECT COUNT(*) FROM msdb.dbo.sysjobs WHERE name = N'e2e nightly' AND enabled = 0")[0][0] == 1
+    assert tgt.query("SELECT database_name FROM msdb.dbo.sysjobsteps s JOIN msdb.dbo.sysjobs j ON j.job_id = s.job_id "
+                     "WHERE j.name = N'e2e nightly'")[0][0] == "e2e_tgt"
+    assert rows(tgt.query("SELECT name, is_rpc_out_enabled FROM sys.servers WHERE name = N'E2E_LOOP'")) == \
+        [("E2E_LOOP", True)]
 
 
 def test_validation_detects_tampering(migrated):

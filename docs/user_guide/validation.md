@@ -21,7 +21,25 @@ Any chunk whose checksum differs is **automatically compared row by row**, so ev
 - primary key columns and order;
 - index, foreign key and check constraint names;
 - views, procedures, functions, triggers, synonyms, sequences and types present on the target;
-- identity `IDENT_CURRENT` on both sides.
+- identity `IDENT_CURRENT` on both sides;
+- index storage options: fill factor, `PAD_INDEX`, `IGNORE_DUP_KEY`, lock options and compression,
+  for every index and primary key, and heap compression (`copy_index_options`);
+- user-created statistics: name and columns (`copy_statistics`);
+- extended properties: every name and value (`copy_extended_properties`);
+- users and roles, role memberships, schema owners and every `GRANT`/`DENY` (`copy_security`);
+- compatibility level, read-committed snapshot and snapshot isolation (`copy_database_settings`),
+  every database option, scoped configuration, change tracking and Query Store settings;
+- sparse columns, column sets, masks, typed XML, `GENERATED ALWAYS` and hidden columns, and
+  Always Encrypted settings, per column;
+- memory-optimized tables and their durability, partition schemes, system versioning with its
+  history table and retention, change tracking per table, XML, spatial and full-text indexes;
+- row-level security policies and their predicates, certificates, module signatures and CDC
+  capture instances;
+- SQL Agent jobs and linked servers, when copied.
+
+Database-level items are compared for the scope being migrated: object permissions and properties
+of tables outside `include`/`exclude` are ignored. Each check follows its `copy_*` switch, so
+turning a copy off also stops it being compared.
 
 ### How the row hashes stay driver-independent
 
@@ -45,6 +63,11 @@ excluded from every comparison.
 These are compared with an **order-independent multiset digest**: the sum of row hashes modulo
 2²⁵⁶, plus the row count. Duplicate rows count, so losing one of two identical rows is
 detected. Individual differing rows can't be named, because there is no key.
+
+### Always Encrypted columns
+
+The server can't compute checksums over ciphertext in a meaningful way, so tables with encrypted
+columns are always compared row by row, as ciphertext, whatever the mode.
 
 ### LOB, xml and CLR columns in checksums
 

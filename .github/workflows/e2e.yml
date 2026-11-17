@@ -1,0 +1,50 @@
+name: End-to-end (SQL Server 2022)
+
+# Runs the e2e suite against two real SQL Server 2022 containers (source and target), the same
+# setup as tests/e2e/docker-compose.yml: a full logical migration with validation, then lift.
+on:
+  push:
+    branches: ["main", "release/**"]
+  pull_request:
+  workflow_dispatch:
+
+permissions: read-all
+
+jobs:
+  e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+      - name: Install test tooling (hash-locked) and the package (no dependencies)
+        run: |
+          pip install --require-hashes -r ci/requirements-test.txt
+          pip install --no-deps -e .
+      - name: Start source and target SQL Server
+        run: docker compose -f tests/e2e/docker-compose.yml up -d
+      - name: Wait until both servers accept connections
+        run: |
+          for svc in source target; do
+            for i in $(seq 1 90); do
+              if docker compose -f tests/e2e/docker-compose.yml logs "$svc" 2>&1 \
+                   | grep -q "SQL Server is now ready for client connections"; then
+                echo "$svc ready"; break
+              fi
+              sleep 2
+            done
+          done
+          sleep 10
+      - name: Run the end-to-end suite
+        env:
+          MSSQL_E2E: "1"
+        run: python -m pytest tests/e2e -v --tb=short -s
+      - name: Server logs on failure
+        if: failure()
+        run: docker compose -f tests/e2e/docker-compose.yml logs --tail 200

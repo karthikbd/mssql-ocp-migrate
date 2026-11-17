@@ -44,6 +44,30 @@ schema_mode = "create"         # create | skip (target schema already deployed, 
 if_target_not_empty = "fail"   # fail | truncate | resume
 copy_programmable_objects = true
 state_file = "migration_state.json"
+# besides tables, data and code, also copy (all default to true):
+copy_index_options = true      # fill factor, PAD_INDEX, IGNORE_DUP_KEY, lock options, ROW/PAGE compression
+copy_statistics = true         # user-created statistics (CREATE STATISTICS)
+copy_extended_properties = true
+copy_security = true           # users, roles, memberships, schema owners, GRANT/DENY (create the logins first)
+copy_database_settings = true  # compatibility level, read-committed snapshot, snapshot isolation
+compatibility_level = "source" # source | target | a number such as "150"
+index_sort_in_tempdb = true    # faster index builds after the load
+index_maxdop = 0               # 0 = server default
+copy_data_masking = true       # MASKED WITH (...) columns; the source login needs UNMASK to read real data
+copy_row_level_security = true # security policies, switched on after validation
+restore_system_versioning = true   # temporal tables: history copied, SYSTEM_VERSIONING turned back on
+memory_optimized = "keep"      # keep | disk (create memory-optimized tables as ordinary tables)
+partition_filegroups = "primary"   # primary (all partitions on PRIMARY) | source (filegroups must exist)
+copy_full_text = true          # full-text catalogs, stoplists and indexes (needs the full-text feature)
+copy_service_broker = true     # message types, contracts, queues, services, routes, event notifications
+copy_certificates = true       # certificates with private keys, certificate users, module signatures
+master_key_password_env = "TARGET_DB_MASTER_KEY_PASSWORD"   # for a new database master key
+trust_clr_assemblies = false   # sp_add_trusted_assembly for CLR assemblies (needs sysadmin)
+copy_change_tracking = true
+copy_cdc = true                # change data capture (needs sysadmin and SQL Agent on the target)
+copy_logins = true             # SQL logins of mapped users, same SID and password hash (needs sysadmin)
+copy_agent_jobs = false        # SQL Agent jobs that run in this database, created DISABLED
+copy_linked_servers = false    # linked servers (remote passwords are never readable: re-enter them)
 
 [validation]
 mode = "checksum"              # count | checksum | full
@@ -65,6 +89,9 @@ cutover_source = "norecovery"  # source goes to RESTORING at cut-over = instant 
 parallel_databases = 2
 network_gbps = 10              # for the timeline estimate
 target_write_mb_s = 1500       # OCP storage write speed for the timeline estimate
+update_statistics_after = false # sp_updatestats after cut-over (recommended when the target is a newer version)
+copy_agent_jobs = false        # SQL Agent jobs of the lifted databases (created disabled)
+copy_linked_servers = false
 # path_map = { '\\\\nas01\\sqlbackups\\LOG' = "/var/opt/mssql/existing-logs" }  # existing log-backup jobs
 """
 

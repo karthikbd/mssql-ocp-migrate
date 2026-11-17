@@ -3,21 +3,22 @@ tests implement it on SQLite so the orchestration logic can be exercised anywher
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from typing import Any, Iterable, Iterator, List, Optional, Sequence, Tuple
+from dataclasses import dataclass, field
+from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
 
-from .model import Chunk, Column, Table
+from .model import Chunk, Column, DatabaseExtras, Table
 
 
 @dataclass
 class ModuleDef:
     """A programmable object copied verbatim: view, procedure, function, trigger, synonym, sequence."""
-    kind: str            # VIEW | PROCEDURE | FUNCTION | TRIGGER | SYNONYM | SEQUENCE | TYPE
+    kind: str            # VIEW | PROCEDURE | FUNCTION | TRIGGER | SYNONYM | SEQUENCE | TYPE | ASSEMBLY | ...
     schema: str
     name: str
     definition: Optional[str]
     parent: Optional[str] = None     # schema.table for triggers
     disabled: bool = False
+    meta: Dict[str, Any] = field(default_factory=dict)   # kind-specific extras (assembly hash, filegroups)
 
     @property
     def fqn(self) -> str:
@@ -36,6 +37,10 @@ class Database(ABC):
 
     def list_schemas(self) -> List[str]:
         return []
+
+    def database_extras(self) -> Optional["DatabaseExtras"]:
+        """Database settings, principals, permissions and extended properties (None if unsupported)."""
+        return None
 
     @abstractmethod
     def quote(self, name: str) -> str: ...
