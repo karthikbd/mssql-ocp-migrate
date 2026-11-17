@@ -10,10 +10,14 @@ on:
 
 permissions: read-all
 
+concurrency:
+  group: e2e-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
     permissions:
       contents: read
     steps:
@@ -44,7 +48,14 @@ jobs:
       - name: Run the end-to-end suite
         env:
           MSSQL_E2E: "1"
-        run: python -m pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v --tb=short -s
-      - name: Server logs on failure
-        if: failure()
-        run: docker compose -f tests/e2e/docker-compose.yml logs --tail 200
+        run: python -m pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v --tb=short -s -o faulthandler_timeout=900
+      - name: Server logs and blocking sessions on failure
+        if: failure() || cancelled()
+        run: |
+          docker compose -f tests/e2e/docker-compose.yml logs --tail 200
+          for svc in source target; do
+            docker compose -f tests/e2e/docker-compose.yml exec -T "$svc" /opt/mssql-tools18/bin/sqlcmd -C \
+              -S localhost -U sa -P 'Str0ng!Passw0rd' -W -Q "SELECT r.session_id, r.blocking_session_id,
+              r.wait_type, r.wait_time, r.command, DB_NAME(r.database_id), LEFT(t.text, 300) FROM sys.dm_exec_requests r
+              CROSS APPLY sys.dm_exec_sql_text(r.sql_handle) t WHERE r.session_id <> @@SPID" || true
+          done

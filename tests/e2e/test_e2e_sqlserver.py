@@ -9,6 +9,7 @@ Environment (defaults match docker-compose.yml):
 """
 import os
 import re
+import time
 from pathlib import Path
 
 import pytest
@@ -38,7 +39,10 @@ def run_script(side: str, path: Path) -> None:
     try:
         for batch in re.split(r"^\s*GO\s*$", path.read_text(encoding="utf-8"), flags=re.M | re.I):
             if batch.strip():
-                c.execute(batch)
+                try:
+                    c.execute(batch)
+                except Exception as exc:
+                    raise RuntimeError(f"{path.name}: {exc}\n--- batch ---\n{batch.strip()[:600]}") from exc
     finally:
         c.close()
 
@@ -46,7 +50,9 @@ def run_script(side: str, path: Path) -> None:
 @pytest.fixture(scope="module")
 def migrated(tmp_path_factory):
     tmp = tmp_path_factory.mktemp("e2e")
+    t0 = time.monotonic()
     run_script("source", HERE / "seed_source.sql")
+    print(f"seeded source in {time.monotonic() - t0:.0f}s", flush=True)
     c = connect(conn_cfg("target", "master"), autocommit=True)
     c.execute("IF DB_ID('e2e_tgt') IS NOT NULL BEGIN ALTER DATABASE e2e_tgt SET SINGLE_USER WITH ROLLBACK "
               "IMMEDIATE; DROP DATABASE e2e_tgt; END")
@@ -61,7 +67,8 @@ def migrated(tmp_path_factory):
     cfg.migration.state_file = str(tmp / "state.json")
     cfg.validation.sample_full_pct = 10
     cfg.report_dir = str(tmp / "report")
-    run = Migrator(cfg).migrate()
+    t0 = time.monotonic()
+    run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
     from mssql_ocp_migrate import report
     print("report:", report.write(cfg, run=run))
     src = connect(conn_cfg("source", "e2e_src"))
