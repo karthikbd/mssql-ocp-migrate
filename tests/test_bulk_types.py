@@ -153,3 +153,38 @@ def test_select_expressions_keep_full_precision():
     exprs = SqlServer.select_exprs(db, None, cols)
     assert exprs == ["CAST([d2] AS nvarchar(40))", "CONVERT(nvarchar(30), [d], 126)",
                      "CAST([g] AS varbinary(max))", "[t3]", "[n]", "CAST([h] AS nvarchar(4000))"]
+
+
+def test_bulk_metadata_rejection_names_the_column_and_falls_back_to_insert():
+    from mssql_ocp_migrate import sqlserver as S
+    from mssql_ocp_migrate.model import Table
+
+    class Cur:
+        def __init__(self):
+            self._session = self
+
+        def execute(self, sql):
+            pass
+
+        def submit_bulk(self, meta, rows):
+            raise RuntimeError("Received an invalid column length from the bcp client for colid 2.")
+
+        def close(self):
+            pass
+
+    class Raw:
+        def cursor(self):
+            return Cur()
+
+    db = SqlServer.__new__(SqlServer)
+    db.driver = "pytds"
+    db.conn = type("C", (), {"raw": Raw()})()
+    t = Table("dbo", "T", columns=[Column("Id", "int"), Column("Tag", "char", 3)])
+    with pytest.raises(RuntimeError, match=r"\[column Tag sent as VARCHAR\(3\)\]"):
+        db._insert_bulk_pytds("[dbo].[T]", t, t.insert_columns, [], False)
+    assert "dbo.T" in S._PYTDS_NO_BULK
+    calls = []
+    db._load_rows_pytds = lambda *a: calls.append("rows") or 0
+    db.bulk_load(t, [], False)
+    assert calls == ["rows"]
+    S._PYTDS_NO_BULK.discard("dbo.T")

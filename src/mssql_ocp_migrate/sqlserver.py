@@ -236,7 +236,7 @@ class SqlServer(CatalogMixin, Database):
             return self._load_pyodbc(table, cols, batches, identity)
         if self.driver == "pymssql":
             return self._load_pymssql(table, cols, batches, identity, strategy, tablock)
-        if strategy == ID_ROW_INSERT or any(_fixed_size_clr(c) for c in cols):
+        if strategy == ID_ROW_INSERT or table.fqn in _PYTDS_NO_BULK or any(_fixed_size_clr(c) for c in cols):
             # INSERT BULK rejects varbinary metadata for size-capped CLR types; INSERT converts
             return self._load_rows_pytds(table, cols, batches, identity)
         if strategy == ID_SET_INSERT_BULK:
@@ -285,6 +285,14 @@ class SqlServer(CatalogMixin, Database):
             cur.execute(f"INSERT BULK {target_name} ({col_defs}) WITH ({', '.join(opts)})")
             cur._session.submit_bulk(meta, rows())
             cur._session.process_simple_request()
+        except Exception as exc:
+            named = _name_bulk_column(exc, meta)
+            if table is not None and any(s in str(exc) for s in _BULK_METADATA_ERRORS):
+                # the chunk is retried; this table then loads with INSERT statements (slower, exact)
+                _PYTDS_NO_BULK.add(table.fqn)
+                log.warning("%s: INSERT BULK rejected a column (%s); loading this table with INSERT "
+                            "statements instead", table.fqn, named)
+            raise named from exc
         finally:
             cur.close()
         return counter[0]
@@ -469,6 +477,23 @@ def pytds_type(c: Column):
     raise ValueError(f"unsupported column type {c.type_name} ({c.name})")
 
 
+def _name_bulk_column(exc: Exception, meta) -> Exception:
+    """SQL Server reports bulk errors by 'colid N' (position in the INSERT BULK list); add the
+    column's name and declared type so the error says which column it is."""
+    import re
+    m = re.search(r"colid (\d+)|for column (\d+)", str(exc))
+    if not m:
+        return exc
+    i = int(m.group(1) or m.group(2)) - 1
+    if not 0 <= i < len(meta):
+        return exc
+    col = meta[i]
+    try:
+        return type(exc)(f"{exc} [column {col.column_name} sent as {col.type.get_declaration()}]")
+    except Exception:
+        return RuntimeError(f"{exc} [column {col.column_name} sent as {col.type.get_declaration()}]")
+
+
 def _fixed_size_clr(c: Column) -> bool:
     """hierarchyid or a user-defined CLR type with a byte cap (MaxByteSize < 8000), as opposed to
     geography / geometry / (max) types, which bulk-load as varbinary(max). INSERT BULK rejects
@@ -502,6 +527,8 @@ def _BinaryColumn(size: int, **kw):
 
 
 _PYMSSQL_NO_BULK: set = set()
+_PYTDS_NO_BULK: set = set()
+_BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size")
 
 
 def _pymssql_coercers(cols: Sequence[Column]):
