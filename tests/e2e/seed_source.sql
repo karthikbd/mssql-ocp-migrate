@@ -76,10 +76,12 @@ FROM n;
 GO
 DELETE FROM sales.Customer WHERE CustomerId % 13 = 0;    -- identity gaps must survive
 GO
+SELECT CustomerId, ROW_NUMBER() OVER (ORDER BY CustomerId) - 1 AS rn INTO #cu FROM sales.Customer;
+CREATE UNIQUE CLUSTERED INDEX cx ON #cu (rn);
+DECLARE @cnt int = (SELECT COUNT(*) FROM #cu);
 WITH n AS (SELECT TOP (600000) ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) AS i
            FROM sys.all_objects a CROSS JOIN sys.all_objects b CROSS JOIN sys.all_objects c),
-     cu AS (SELECT CustomerId, ROW_NUMBER() OVER (ORDER BY CustomerId) - 1 AS rn, COUNT(*) OVER () AS cnt
-            FROM sales.Customer)
+     cu AS (SELECT CustomerId, rn, @cnt AS cnt FROM #cu)
 INSERT sales.[Order] (CustomerId, OrderDate, OrderTime, PlacedAt, Amount, Tax, Discount, Rate, Ratio, Status,
                       Priority, Payload, Hash, Tag, Meta)
 SELECT cu.CustomerId,
@@ -98,7 +100,9 @@ SELECT cu.CustomerId,
        HASHBYTES('MD5', CAST(i AS varchar(12))),
        CASE WHEN i % 9 = 0 THEN NULL ELSE 'AB' END,
        CASE WHEN i % 500 = 0 THEN CAST(CONCAT('<order id="', i, '"><note>x &amp; y</note></order>') AS xml) END
-FROM n JOIN cu ON cu.rn = n.i % cu.cnt;
+FROM n JOIN cu ON cu.rn = n.i % @cnt
+OPTION (HASH JOIN);
+DROP TABLE #cu;
 GO
 DELETE FROM sales.[Order] WHERE OrderId BETWEEN 1000 AND 1999;    -- gap
 GO

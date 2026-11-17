@@ -39,8 +39,11 @@ def run_script(side: str, path: Path) -> None:
     try:
         for batch in re.split(r"^\s*GO\s*$", path.read_text(encoding="utf-8"), flags=re.M | re.I):
             if batch.strip():
+                t0 = time.monotonic()
                 try:
                     c.execute(batch)
+                    if time.monotonic() - t0 > 10:
+                        print(f"  slow seed batch ({time.monotonic() - t0:.0f}s): {batch.strip()[:80]!r}", flush=True)
                 except Exception as exc:
                     raise RuntimeError(f"{path.name}: {exc}\n--- batch ---\n{batch.strip()[:600]}") from exc
     finally:
