@@ -446,12 +446,14 @@ def pytds_type(c: Column):
         return T.RealType() if 0 < c.precision <= 24 else T.FloatType()
     if t in ("decimal", "numeric"):
         return T.DecimalType(precision=c.precision, scale=c.scale)
+    # char/nchar: the driver writes (n)varchar metadata, and INSERT BULK rejects a declaration that
+    # doesn't match it ("Invalid column type"), so declare (n)varchar; the server pads to the column
     if t == "char":
-        return T.CharType(size=c.max_length)
+        return T.VarCharType(size=c.max_length)
     if t == "binary":      # INSERT BULK uses _BinaryColumn; this type is for the declaration only
         return T.BinaryType(size=c.max_length)
     if t == "nchar":
-        return T.NCharType(size=c.max_length // 2)
+        return T.NVarCharType(size=c.max_length // 2)
     if t == "varchar":
         return T.VarCharMaxType() if c.max_length == -1 else T.VarCharType(size=c.max_length)
     if t == "nvarchar":
@@ -468,9 +470,10 @@ def pytds_type(c: Column):
 
 
 def _fixed_size_clr(c: Column) -> bool:
-    """A user-defined CLR type with a byte cap (MaxByteSize < 8000), as opposed to geography /
-    geometry / (max) types, which bulk-load as varbinary(max)."""
-    return c.clr_udt and 0 < c.max_length <= 8000
+    """hierarchyid or a user-defined CLR type with a byte cap (MaxByteSize < 8000), as opposed to
+    geography / geometry / (max) types, which bulk-load as varbinary(max). INSERT BULK rejects
+    these, so their tables load with INSERT statements, which convert implicitly."""
+    return (c.clr_udt or c.type_name.lower() == "hierarchyid") and 0 < c.max_length <= 8000
 
 
 def _binary_serializer_class():

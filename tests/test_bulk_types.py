@@ -26,10 +26,11 @@ CASES = [
     (Column("a", "decimal", precision=38, scale=10), decimal.Decimal("1234567890123456789012345678.0123456789"),
      "DECIMAL(38,10)"),
     (Column("a", "numeric", precision=5, scale=2), decimal.Decimal("-999.99"), "DECIMAL(5,2)"),
-    (Column("a", "char", max_length=10), "abc", "CHAR(10)"),
+    # char/nchar are declared as (n)varchar to match the metadata the driver writes
+    (Column("a", "char", max_length=10), "abc", "VARCHAR(10)"),
     (Column("a", "varchar", max_length=50), "héllo", "VARCHAR(50)"),
     (Column("a", "varchar", max_length=-1), "x" * 100_000, "VARCHAR(MAX)"),
-    (Column("a", "nchar", max_length=20), "漢字", "NCHAR(10)"),
+    (Column("a", "nchar", max_length=20), "漢字", "NVARCHAR(10)"),
     (Column("a", "nvarchar", max_length=400), "ü€😀", "NVARCHAR(200)"),
     (Column("a", "nvarchar", max_length=-1), "ü" * 50_000, "NVARCHAR(MAX)"),
     # binary(n) is declared BINARY(n) and written by our own BINARY serializer (see below)
@@ -115,6 +116,7 @@ def test_size_capped_clr_types_use_row_inserts():
     from mssql_ocp_migrate.sqlserver import _fixed_size_clr
     udt = Column("P", "Point", 16, clr_udt=True, user_type="Point", user_type_schema="geo")
     assert _fixed_size_clr(udt) and not _fixed_size_clr(Column("g", "geography", -1))
+    assert _fixed_size_clr(Column("h", "hierarchyid", 892))
     db = SqlServer.__new__(SqlServer)
     db.driver, calls = "pytds", []
     db._load_rows_pytds = lambda t, cols, b, ident: calls.append("rows") or 0
@@ -122,6 +124,19 @@ def test_size_capped_clr_types_use_row_inserts():
     db.bulk_load(Table("geo", "T", columns=[Column("Id", "int"), udt]), [], False)
     db.bulk_load(Table("geo", "U", columns=[Column("Id", "int"), Column("g", "geography", -1)]), [], False)
     assert calls == ["rows", "bulk"]
+
+
+def test_declarations_match_the_metadata_the_driver_writes():
+    """INSERT BULK rejects a column whose declared type differs from its TDS metadata."""
+    factory = tds_types.SerializerFactory(tds_base.TDS74)
+    declared_family = {"VARCHAR": tds_base.XSYBVARCHAR, "NVARCHAR": tds_base.XSYBNVARCHAR,
+                       "VARBINARY": tds_base.XSYBVARBINARY, "BINARY": tds_base.XSYBBINARY}
+    for col, _, decl in CASES:
+        meta = SqlServer._bulk_metadata(None, "t", None, [col])[0]
+        ser = meta.choose_serializer(type_factory=factory, collation=raw_collation)
+        family = decl.split("(")[0]
+        if family in declared_family:
+            assert ser.type == declared_family[family], (col.type_name, decl, ser)
 
 
 def test_unknown_type_is_rejected():
