@@ -2,7 +2,7 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
-## [0.4.0] - 2026-11-17
+## [0.4.0] - 2026-11-18
 
 Gaps found by comparing with dbatools, Microsoft's migration tooling (DMA, Azure DMS, SqlPackage)
 and Microsoft's list of features SQL Server on Linux doesn't support.
@@ -20,6 +20,10 @@ and Microsoft's list of features SQL Server on Linux doesn't support.
 - `lift`: the database master key is re-encrypted by the target's service master key (`database_master_key_password_env`)
 - Validation compares module definitions, their settings, disabled state and trigger order, object owners, and reports references that no longer resolve on the target
 - End-to-end CI across SQL Server versions: 2022 → 2022, 2019 → 2022, 2022 → 2025, 2025 → 2025
+
+### Fixed
+- Tables with `text`, `ntext` or `image` columns failed to load with the bundled driver ("Bulk load data was expected but not sent"); they now load with INSERT statements
+- Server-level permissions are granted from `master` (they failed when the session was in another database)
 
 ## [0.3.0] - 2026-11-17
 
