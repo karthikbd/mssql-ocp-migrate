@@ -90,6 +90,7 @@ Corporate networks: see the JFrog Artifactory / Curation notes in the
 mssql-migrate init-config > migrate.toml   # edit hosts, database, users
 export SRC_DB_PASSWORD=...                  # or password_file = an OpenShift secret mount
 mssql-migrate check    -c migrate.toml      # connectivity, versions, table inventory, warnings
+mssql-migrate assess   -c migrate.toml      # what won't work or behaves differently on Linux / OpenShift
 mssql-migrate estimate -c migrate.toml      # measures real throughput, projects total time
 mssql-migrate migrate  -c migrate.toml      # schema -> data -> indexes/FKs -> objects -> validation
 mssql-migrate validate -c migrate.toml      # re-run any time (for example right before cut-over)
@@ -185,7 +186,8 @@ Server must be reachable from the cluster (egress / firewall on 1433).
 
 1. `migrate` while the application is still running (bulk of the data, hours).
 2. Stop writes (application maintenance window, or `ALTER DATABASE ... SET READ_ONLY`).
-3. `migrate --truncate --include <tables that changed>`, or a full re-run for small databases.
+3. `sync --final` (change tracking; see above), or `migrate --truncate --include <tables that changed>`,
+   or a full re-run for small databases.
 4. `validate --mode checksum` (or `full`), keep the HTML report as evidence, then switch connection strings.
 
 ## Permissions

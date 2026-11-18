@@ -63,6 +63,16 @@ $ mssql-migrate check -c migrate.toml
 Warnings tell you, before anything runs, what will need attention: heaps, temporal tables,
 partitioning, spatial indexes and so on.
 
+Then ask what won't work, or will behave differently, on SQL Server on Linux / OpenShift:
+
+```console
+$ mssql-migrate assess -c migrate.toml
+```
+
+It lists blockers, warnings and notes with a suggested fix for each (`xp_cmdshell`, Windows
+logins, FILESTREAM, job steps SQL Agent on Linux can't run, version, edition, collation and
+free-space differences), and exits with code 2 if there are blockers. See {doc}`/user_guide/assess`.
+
 ## 4. Estimate
 
 ```console
@@ -113,7 +123,16 @@ chunk clears its own key range first, so nothing is duplicated.
 
 ## 8. Validate again at cut-over
 
-Data keeps changing on a live source. Right before switching the application over:
+Data keeps changing on a live source. With change tracking on the source
+(`sync_enable_change_tracking = true` before `migrate`), apply what changed since the copy, as
+often as you like, then finish in the maintenance window:
+
+```console
+$ mssql-migrate sync -c migrate.toml            # while the application is still running
+$ mssql-migrate sync -c migrate.toml --final    # writes stopped: last changes, identities, validation
+```
+
+See {doc}`/user_guide/sync`. Without change tracking, reload the tables that changed:
 
 ```console
 $ mssql-migrate migrate -c migrate.toml --truncate --include "sales.Order*"   # reload what changed
