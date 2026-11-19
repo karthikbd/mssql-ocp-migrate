@@ -14,6 +14,17 @@ Same quality and supply-chain checks as lodestream.
 - A configuration value of the wrong type (`port = "1433"`, `include = "dbo.*"`, `source = 5`, ...)
   failed later with a Python error, or not at all; it is now rejected at start-up with a message that
   names the setting and the expected type. `compatibility_level` takes a number or text. Found by fuzzing.
+- **pymssql** (found by the new end-to-end runs with each driver): binary values sent through INSERT
+  arrived as text and were rejected (pymssql 2.4 quotes `bytes` as a string literal); UTF-8 `varchar`
+  values were mangled on read; FreeTDS bulk copy dropped the connection on long `(max)` values. Binary
+  parameters are now sent as binary, UTF-8 `varchar` is read as `nvarchar`, and `(max)`, `datetime` and
+  UTF-8 columns load with INSERT.
+- **pyodbc**: `text`/`ntext`/`image` columns failed with `MemoryError` and CLR / `hierarchyid` columns
+  with a cast error (fast_executemany sized its buffers from the target column; parameters now carry
+  the transport type); a failed chunk left `IDENTITY_INSERT` on for the next table; ODBC connection
+  pooling handed validation a connection still inside a worker's transaction, which failed on
+  memory-optimized tables (pooling is now off); UTF-8 `varchar` values were mangled both ways (now
+  read and sent as `nvarchar`).
 
 ### Added
 - ClusterFuzzLite (Atheris) fuzzing of config loading, row fingerprints, chunk predicates and

@@ -9,11 +9,12 @@ from mssql_ocp_migrate.sqlserver import SqlServer, _pyodbc_placeholder
 def test_placeholders_carry_the_transport_type():
     cols = [Column("h", "hierarchyid"), Column("g", "geography"), Column("t", "text"), Column("n", "ntext"),
             Column("i", "image"), Column("d", "datetime"), Column("j", "json"), Column("v", "int"),
-            Column("s", "nvarchar", max_length=-1)]
+            Column("s", "nvarchar", max_length=-1),
+            Column("u", "varchar", max_length=60, collation="Latin1_General_100_CI_AS_SC_UTF8")]
     assert [_pyodbc_placeholder(c) for c in cols] == [
         "CAST(? AS nvarchar(4000))", "CAST(? AS varbinary(max))", "CAST(? AS varchar(max))",
         "CAST(? AS nvarchar(max))", "CAST(? AS varbinary(max))", "CAST(? AS nvarchar(30))",
-        "CAST(? AS nvarchar(max))", "?", "?"]
+        "CAST(? AS nvarchar(max))", "?", "?", "CAST(? AS nvarchar(60))"]
 
 
 class _Cursor:

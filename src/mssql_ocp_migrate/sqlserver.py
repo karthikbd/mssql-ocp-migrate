@@ -679,6 +679,9 @@ def _pyodbc_placeholder(c: Column) -> str:
         return "CAST(? AS nvarchar(30))"          # read as ISO 8601 text (style 126)
     if t in ("json", "vector"):
         return "CAST(? AS nvarchar(max))"         # SQL Server 2025: travel as their JSON text
+    if _utf8_char(c):
+        # a varchar parameter goes as 8-bit text in the client code page; nvarchar keeps every character
+        return f"CAST(? AS nvarchar({'max' if c.max_length == -1 else c.max_length}))"
     return "?"
 
 

@@ -11,6 +11,11 @@ The same quality and supply-chain checks as lodestream, and two fixes found by f
 - **Wrong value types in the configuration** (`port = "1433"`, `include = "dbo.*"`, a section
   that isn't a table) are rejected at start-up with a message naming the setting and the expected
   type, instead of failing later. `compatibility_level` accepts `150` or `"150"`.
+- **pymssql and pyodbc fixes**, found by running the end-to-end suite with each driver: with
+  pymssql, binary values were sent as text, UTF-8 `varchar` was mangled on read and long `(max)`
+  values broke bulk copy; with pyodbc, `text`/`ntext`/`image` failed with `MemoryError`, CLR and
+  `hierarchyid` columns with a cast error, a failed chunk left `IDENTITY_INSERT` on, and pooled
+  connections carried a transaction into validation (pooling is now off).
 - **Fuzzing** with ClusterFuzzLite (Atheris) on every pull request, push and daily: config
   loading, row fingerprints, chunk predicates and identifier quoting.
 - **All three drivers end to end:** every SQL Server version pair now runs with the bundled
