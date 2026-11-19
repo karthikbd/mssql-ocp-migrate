@@ -198,6 +198,12 @@ def _dto_converter(value: bytes) -> _dt.datetime:
 def _connect_pyodbc(cfg: ConnectionConfig, autocommit: bool) -> Any:
     import pyodbc  # optional, user-provided
 
+    # pyodbc turns on ODBC connection pooling by default: a "new" connection can then be a pooled one a
+    # worker used with an explicit transaction, and arrive with that transaction state (a validation
+    # connection with @@TRANCOUNT 1 fails on memory-optimized tables). Every connection here is long-lived,
+    # so pooling gains nothing. It must be set before the first connect.
+    pyodbc.pooling = False
+
     server = f"{cfg.host}\\{cfg.instance}" if cfg.instance else f"{cfg.host},{cfg.port}"
     parts = {
         "DRIVER": "{%s}" % cfg.odbc_driver,
@@ -213,6 +219,7 @@ def _connect_pyodbc(cfg: ConnectionConfig, autocommit: bool) -> Any:
         parts["HostNameInCertificate"] = cfg.hostname_in_certificate
     conn = pyodbc.connect(";".join(f"{k}={v}" for k, v in parts.items()),
                           autocommit=autocommit, timeout=cfg.login_timeout)
+    conn.autocommit = autocommit         # explicit, whatever the driver manager did
     conn.add_output_converter(-155, _dto_converter)
     if cfg.query_timeout:
         conn.timeout = cfg.query_timeout

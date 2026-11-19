@@ -37,7 +37,7 @@ def conn_cfg(side: str, database: str) -> ConnectionConfig:
 
 def _diagnose(database: str, side: str = "target") -> None:
     """Session state and a few probe queries on a fresh connection, printed for CI logs."""
-    for autocommit in (True, False):
+    for autocommit in (True,):        # a manual-commit probe would hold locks the rest of the suite waits on
         c = connect(conn_cfg(side, database), autocommit=autocommit)
         try:
             for sql in ("SELECT @@TRANCOUNT, XACT_STATE(), @@OPTIONS, @@VERSION",
@@ -116,14 +116,12 @@ def migrated(tmp_path_factory):
     cfg.validation.sample_full_pct = 10
     cfg.report_dir = str(tmp / "report")
     t0 = time.monotonic()
-    _diagnose("e2e_src", "source")
     try:
         run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
     except Exception:
         traceback.print_exc()        # now, not in the summary: a later test may hang and lose it
         _diagnose("e2e_tgt")
         raise
-    _diagnose("e2e_tgt")
     print("run warnings:", *run.warnings, sep="\n  ", flush=True)
     print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
     print("failed chunks:", *[f"{n}: {c} {r.errors[:3]}" for n, r in run.tables.items() for c in r.failed_chunks],

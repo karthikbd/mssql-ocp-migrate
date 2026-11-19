@@ -60,3 +60,23 @@ def test_identity_insert_is_switched_off_even_after_a_failure(fail):
     assert log[0] == "SET IDENTITY_INSERT [dbo].[L] ON"
     assert log[1] == "INSERT INTO [dbo].[L] ([id], [t]) VALUES (?, CAST(? AS varchar(max)))"
     assert log[-2:] == ["SET IDENTITY_INSERT [dbo].[L] OFF", "close"]
+
+
+def test_pyodbc_pooling_is_off_and_autocommit_is_explicit(monkeypatch):
+    """Pooled ODBC connections can carry a worker's transaction into a new 'autocommit' connection."""
+    import sys
+    import types
+
+    from mssql_ocp_migrate.config import ConnectionConfig
+    from mssql_ocp_migrate.drivers import _connect_pyodbc
+
+    class _C:
+        autocommit = None
+
+        def add_output_converter(self, *a):
+            pass
+
+    fake = types.SimpleNamespace(pooling=True, connect=lambda *a, **k: _C())
+    monkeypatch.setitem(sys.modules, "pyodbc", fake)
+    conn = _connect_pyodbc(ConnectionConfig(database="d", password="p"), autocommit=True)
+    assert fake.pooling is False and conn.autocommit is True
