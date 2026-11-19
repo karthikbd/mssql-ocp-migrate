@@ -8,6 +8,7 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![ClusterFuzzLite](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/cflite_batch.yml/badge.svg)](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/cflite_batch.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/karthikbd/mssql-ocp-migrate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/karthikbd/mssql-ocp-migrate)
+[![OpenSSF Best Practices](https://www.bestpractices.dev/projects/16912/badge)](https://www.bestpractices.dev/projects/16912)
 
 Move a SQL Server database to SQL Server running on **OpenShift (OCP)**, or to any other SQL Server,
 with a parallel chunked copy, resume after failure, and end-to-end validation that proves the
