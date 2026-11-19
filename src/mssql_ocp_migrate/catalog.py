@@ -11,7 +11,7 @@ import hashlib
 import logging
 import re
 import secrets
-from typing import Any, Dict, List, Optional, Sequence, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .adapter import ModuleDef
 from .ddl import lit, q, type_sql
@@ -49,7 +49,7 @@ def variant_literal(base: Optional[str], text: Optional[str]) -> str:
     return lit(text)
 
 
-def _bool(v) -> bool:
+def _bool(v: Any) -> bool:
     return bool(v) and v not in (0, "0")
 
 
@@ -58,7 +58,7 @@ class CatalogMixin:
     """Catalog reads. See the module docstring."""
 
     # these come from SqlServer
-    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:  # pragma: no cover
+    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[Tuple[Any, ...]]:  # pragma: no cover
         raise NotImplementedError
 
     def _has_col(self, view: str, col: str) -> bool:  # pragma: no cover
@@ -195,7 +195,7 @@ class CatalogMixin:
         return joins
 
     @staticmethod
-    def column_from_row(r) -> Column:
+    def column_from_row(r: Any) -> Column:
         (_oid, name, utype, is_udt, is_asm, uschema, stype, max_len, prec, scale, nullable, is_ident, seed,
          inc, is_comp, comp_def, persisted, coll, dname, ddef, sparse, colset, mask, enc_type, cek, enc_alg,
          gen, hidden, xsch, xname, xdoc, *more) = r
@@ -451,7 +451,7 @@ class CatalogMixin:
             hs, hn = self.query("SELECT OBJECT_SCHEMA_NAME(?), OBJECT_NAME(?)", [hist, hist])[0]
             retention = None
             if ret is not None and int(ret) > 0 and unit and str(unit) != "INFINITE":
-                retention = f"{int(ret)} {str(unit)}S"
+                retention = f"{int(ret)} {unit!s}S"
             tables[oid].temporal = Temporal(periods[oid][0], periods[oid][1], hs, hn, retention)
 
     def _load_change_tracking(self, tables: Dict[int, Table]) -> None:
@@ -606,11 +606,11 @@ class CatalogMixin:
         by_id = {r[0]: r for r in rows}
         order: List[int] = []
 
-        def visit(aid, seen=()):
+        def visit(aid: Any, seen: Tuple[Any, ...]=()) -> None:
             if aid in order or aid not in by_id or aid in seen:
                 return
             for rid in refs.get(aid, []):
-                visit(rid, seen + (aid,))
+                visit(rid, (*seen, aid))
             order.append(aid)
         for aid in by_id:
             visit(aid)
@@ -736,7 +736,7 @@ class CatalogMixin:
             out.append(ModuleDef("FULLTEXT STOPLIST", "", name, sql))
         return out
 
-    def _type_name(self, row) -> str:
+    def _type_name(self, row: Any) -> str:
         """Type text from (ut.name, is_user_defined, is_assembly_type, schema, st.name, max_length, precision,
         scale)."""
         utype, is_udt, is_asm, uschema, stype, max_len, prec, scale = row
@@ -758,7 +758,7 @@ class CatalogMixin:
         if not mods:
             return []
         ids = ", ".join(str(int(m[0])) for m in mods)
-        params: Dict[int, List[tuple]] = {}
+        params: Dict[int, List[Tuple[Any, ...]]] = {}
         for row in self.query(f"""
                 SELECT p.object_id, p.parameter_id, p.name, ut.name, ut.is_user_defined, ut.is_assembly_type,
                        SCHEMA_NAME(ut.schema_id), st.name, p.max_length, p.precision, p.scale, p.is_output,
@@ -1036,10 +1036,10 @@ class CatalogMixin:
                 st.query_store = str(r[0][0])
         return st
 
-    def _security(self):
+    def _security(self) -> Any:
         auth = ("dp.authentication_type" if self._has_col("sys.database_principals", "authentication_type")
                 else "CASE WHEN SUSER_SNAME(dp.sid) IS NULL THEN 0 ELSE 1 END")
-        skip = ["dbo", "guest", "INFORMATION_SCHEMA", "sys", "public"] + self._excluded_schemas()
+        skip = ["dbo", "guest", "INFORMATION_SCHEMA", "sys", "public", *self._excluded_schemas()]
         rows = self.query(f"""
             SELECT dp.principal_id, dp.name, dp.type, dp.default_schema_name, SUSER_SNAME(dp.sid), {auth},
                    dp.owning_principal_id,
@@ -1180,7 +1180,7 @@ class CatalogMixin:
                                                  str(op).replace("_", " ") if op else None))
         return list(policies.values())
 
-    def _certificates(self, warnings: List[str]):
+    def _certificates(self, warnings: List[str]) -> Any:
         has_mk = bool(self.query("SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##'")[0][0])
         certs: List[Certificate] = []
         pwd = "Mom!" + secrets.token_hex(24)
@@ -1303,7 +1303,7 @@ class CatalogMixin:
             if not rows:
                 errors.append(f"login {name} not visible on the source (needs VIEW ANY DEFINITION)")
                 continue
-            ptype, sid, phash, defdb, pol, exp, disabled, *rest = rows[0]
+            ptype, sid, phash, _defdb, pol, exp, disabled, *rest = rows[0]
             lang = rest[0] if rest else None
             ptype = str(ptype).strip()
             if ptype == "S":
@@ -1355,7 +1355,7 @@ class CatalogMixin:
             out.append(f"EXEC master.sys.sp_executesql {lit(stmt)}")
         return out
 
-    def unresolved_references(self) -> set:
+    def unresolved_references(self) -> Set[Any]:
         """(referencing object, schema.object) for references in code that don't resolve to an
         object in this database (deferred name resolution lets such code be created; it fails when
         it runs). Cross-database, cross-server and caller-dependent references are left out."""

@@ -4,7 +4,7 @@ from __future__ import annotations
 import logging
 import time
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 from . import ddl
 from .config import Config
@@ -44,7 +44,7 @@ def _parallel_factor(workers: int, executor: str) -> float:
     return 1 + 0.75 * (workers - 1)
 
 
-def estimate(cfg: Config, factory=None, sample_rows: int = 50_000, write_probe: bool = True) -> Estimate:
+def estimate(cfg: Config, factory: Any = None, sample_rows: int = 50_000, write_probe: bool = True) -> Estimate:
     """Measure a logical migration on a sample and project its duration.
 
     Reads ``sample_rows`` from the largest selected table, bulk-loads them into a ``#temp`` table on
@@ -67,7 +67,7 @@ def estimate(cfg: Config, factory=None, sample_rows: int = 50_000, write_probe: 
         big = max(tables, key=lambda t: t.reserved_mb)
         est.sample_table = big.fqn
         bytes_per_row = (big.reserved_mb * 1024 * 1024 / big.row_count) if big.row_count else 200
-        sample: List[tuple] = []
+        sample: List[Tuple[Any, ...]] = []
         t0 = time.perf_counter()
         for batch in src.read_rows(big, Chunk(big.fqn, 0), cfg.migration.batch_rows, ordered=False):
             sample.extend(batch)
@@ -128,7 +128,7 @@ def estimate(cfg: Config, factory=None, sample_rows: int = 50_000, write_probe: 
     return est
 
 
-def _write_probe(tgt, table: Table, sample: List[tuple], batch_rows: int) -> float:
+def _write_probe(tgt: Any, table: Table, sample: List[Tuple[Any, ...]], batch_rows: int) -> float:
     """Bulk-load the sample into a #temp copy of the table on the target, then roll back."""
     from .model import Column
     cols = table.insert_columns

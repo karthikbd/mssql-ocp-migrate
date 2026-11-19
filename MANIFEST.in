@@ -1,4 +1,4 @@
-include README.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md CONTRIBUTING.md CHANGELOG.md .readthedocs.yaml
+include README.md LICENSE THIRD_PARTY_NOTICES.md SECURITY.md CONTRIBUTING.md CHANGELOG.md .readthedocs.yaml GOVERNANCE.md CODE_OF_CONDUCT.md ROADMAP.md vex.openvex.json
 recursive-include docs *.md *.py *.css
 recursive-include tests *.py *.sql *.yml
 recursive-include .clusterfuzzlite *

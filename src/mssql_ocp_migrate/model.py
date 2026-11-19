@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 # SQL Server types whose values cannot be inserted directly, or which differ by design.
 NON_INSERTABLE_TYPES = {"timestamp", "rowversion"}
@@ -93,7 +93,7 @@ class Index:
     bucket_count: int = 0
     is_disabled: bool = False               # ALTER INDEX ... DISABLE (no data, not maintained)
 
-    def options(self) -> dict:
+    def options(self) -> Dict[str, Any]:
         """The storage/behaviour options that must survive a migration (fill factor 100 == 0)."""
         return {"fill_factor": 0 if self.fill_factor in (0, 100) else self.fill_factor,
                 "pad_index": self.is_padded, "ignore_dup_key": self.ignore_dup_key,
@@ -203,7 +203,7 @@ class Table:
     @property
     def key_columns(self) -> List[str]:
         """Columns used for chunking/ordering: PK, else first unique index, else none."""
-        def usable(cols):           # an encrypted key can't be compared or ordered on the server
+        def usable(cols: Sequence[str]) -> bool:           # an encrypted key can't be compared or ordered on the server
             return all(not self.column(c).encrypted for c in cols)
         if self.primary_key:
             cols = [c for c, _ in self.primary_key.columns]
@@ -242,7 +242,7 @@ class Table:
     def has_encrypted(self) -> bool:
         return any(c.encrypted for c in self.columns)
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
 

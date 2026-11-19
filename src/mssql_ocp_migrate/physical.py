@@ -27,7 +27,10 @@ import threading
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Sequence, Tuple
+
+if TYPE_CHECKING:
+    from .drivers import Connection
 
 from .config import Config, ConnectionConfig, LiftConfig
 from .ddl import q
@@ -105,12 +108,12 @@ def move_plan(files: Sequence[DbFile], target_db: str, data_dirs: Sequence[str],
     so restore writes run in parallel on every PV."""
     if not data_dirs:
         raise LiftError("lift.target_data_dirs is empty")
-    load = {d: 0 for d in data_dirs}
+    load = dict.fromkeys(data_dirs, 0)
     out: Dict[str, str] = {}
     used = set()
     for f in sorted(files, key=lambda x: -x.size_bytes):
         base = os.path.basename(f.physical.replace("\\", "/")) or f.logical
-        stem, ext = os.path.splitext(base)
+        _stem, ext = os.path.splitext(base)
         if f.type == "L":
             folder = log_dir
             ext = ext or ".ldf"
@@ -258,7 +261,7 @@ def estimate_timeline(p: DbPlan, lift: LiftConfig) -> Dict[str, float]:
 
 # ============================================================== state
 class LiftState:
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.data: Dict[str, Any] = {"databases": {}}
         if self.path.exists():
@@ -266,8 +269,9 @@ class LiftState:
         self._lock = threading.Lock()
 
     def db(self, name: str) -> Dict[str, Any]:
-        return self.data["databases"].setdefault(name, {"phase": "new", "restored_lsn": None, "logs": 0,
-                                                        "history": []})
+        entry: Dict[str, Any] = self.data["databases"].setdefault(
+            name, {"phase": "new", "restored_lsn": None, "logs": 0, "history": []})
+        return entry
 
     def update(self, name: str, **kw: Any) -> None:
         with self._lock:
@@ -290,13 +294,13 @@ def _master(cfg: ConnectionConfig) -> ConnectionConfig:
 class LongOp:
     """Run one long BACKUP/RESTORE on its own session; report percent complete from a second one."""
 
-    def __init__(self, cfg: ConnectionConfig, progress: Progress, poll_seconds: float = 30.0, connect_fn=None):
+    def __init__(self, cfg: ConnectionConfig, progress: Progress, poll_seconds: float = 30.0, connect_fn: Any = None) -> None:
         self.cfg = _master(cfg)
         self.progress = progress
         self.poll = poll_seconds
         if connect_fn is None:
             from .drivers import connect as connect_fn
-        self._connect = connect_fn
+        self._connect: Callable[..., Any] = connect_fn
 
     def run(self, sql: str, label: str) -> float:
         connect = self._connect
@@ -305,10 +309,10 @@ class LongOp:
         err: List[BaseException] = []
         t0 = time.time()
 
-        def target():
+        def target() -> None:
             try:
                 work.execute(sql)
-            except BaseException as exc:  # noqa: BLE001 - re-raised in caller thread
+            except BaseException as exc:
                 err.append(exc)
 
         th = threading.Thread(target=target, name=f"lift-{label}", daemon=True)
@@ -345,7 +349,7 @@ class Lift:
     :param connect_fn: ``(ConnectionConfig, autocommit) -> Connection``; injectable for tests.
     """
 
-    def __init__(self, cfg: Config, progress: Optional[Progress] = None, connect_fn=None):
+    def __init__(self, cfg: Config, progress: Optional[Progress] = None, connect_fn: Any = None) -> None:
         self.cfg = cfg
         self.lift = cfg.lift
         self.progress = progress or (lambda m: log.info(m))
@@ -354,10 +358,10 @@ class Lift:
         self.state = LiftState(self.lift.state_file)
 
     # -- connections -------------------------------------------------------------
-    def src(self):
+    def src(self) -> "Connection":
         return self._connect(_master(self.cfg.source), autocommit=True)
 
-    def tgt(self):
+    def tgt(self) -> "Connection":
         return self._connect(_master(self.cfg.target), autocommit=True)
 
     def target_name(self, db: str) -> str:
@@ -398,7 +402,7 @@ class Lift:
             t.close()
         return plans
 
-    def _plan_db(self, s, t, db: str, sv: int, tv: int, s_ed: str, t_ed: str) -> DbPlan:
+    def _plan_db(self, s: Any, t: Any, db: str, sv: int, tv: int, s_ed: str, t_ed: str) -> DbPlan:
         row = s.query("SELECT recovery_model_desc, compatibility_level, is_encrypted, state_desc "
                       "FROM sys.databases WHERE name = ?", [db])
         if not row:
@@ -473,7 +477,7 @@ class Lift:
         p.timeline = estimate_timeline(p, self.lift)
         return p
 
-    def _assess_db(self, s, t, db: str, p) -> None:
+    def _assess_db(self, s: Any, t: Any, db: str, p: Any) -> None:
         """Readiness assessment for a physical copy: Linux-unsupported features become blockers
         (FILESTREAM can't even be restored), the rest warnings."""
         from .assess import BLOCKER, COPY_BLOCKING_AREAS, WARNING, assess
@@ -487,7 +491,7 @@ class Lift:
             try:
                 s.execute("USE [master]")
             except Exception:
-                pass
+                log.debug("ignored error", exc_info=True)
         for f in a.findings:
             if f.severity == BLOCKER and f.area in COPY_BLOCKING_AREAS and f.area != "Version":  # version: above
                 p.blockers.append(f"{f.item}: {f.message}" + (f" ({f.fix})" if f.fix else ""))
@@ -564,7 +568,7 @@ class Lift:
         self.state.update(db, phase="restoring", restored_lsn=st.get("full_last_lsn"))
 
     @staticmethod
-    def _filelist(t, devices: Sequence[str]) -> List[DbFile]:
+    def _filelist(t: Any, devices: Sequence[str]) -> List[DbFile]:
         cur = t.raw.cursor()
         try:
             cur.execute(f"RESTORE FILELISTONLY FROM {_media(devices)}")
@@ -726,23 +730,23 @@ class Lift:
             self.progress(f"{db}: {n}")
 
     @staticmethod
-    def _catalog(conn):
+    def _catalog(conn: Any) -> Any:
         """The logical engine's catalog queries over a lift connection (server objects, logins)."""
         from .catalog import CatalogMixin
 
         class _Catalog(CatalogMixin):
-            def __init__(self, c):
+            def __init__(self, c: Any) -> None:
                 self.conn = c
 
-            def query(self, sql, params=None):
+            def query(self, sql: Any, params: Any = None) -> Any:
                 return self.conn.query(sql, params)
 
-            def _has_col(self, view, col):
+            def _has_col(self, view: Any, col: Any) -> bool:
                 return self.conn.scalar("SELECT COL_LENGTH(?, ?)", [view, col]) is not None
 
         return _Catalog(conn)
 
-    def copy_server_objects(self, s, t, db: str, tdb: str) -> List[str]:
+    def copy_server_objects(self, s: Any, t: Any, db: str, tdb: str) -> List[str]:
         """SQL Agent jobs with steps in the database (created disabled), linked servers, and the
         user-defined messages the database's code raises."""
         cat, notes = self._catalog(s), []
@@ -778,7 +782,7 @@ class Lift:
         return notes
 
     @staticmethod
-    def _in_db(conn, db: str, fn):
+    def _in_db(conn: Any, db: str, fn: Any) -> Any:
         """Run a catalog function with ``db`` as the connection's current database."""
         conn.execute(f"USE {q(db)}")
         try:
@@ -786,7 +790,7 @@ class Lift:
         finally:
             conn.execute("USE [master]")
 
-    def copy_logins(self, s, t, db: str) -> List[str]:
+    def copy_logins(self, s: Any, t: Any, db: str) -> List[str]:
         """Logins mapped to users of this database with the same SID and password hash (the
         sp_help_revlogin / Copy-DbaLogin technique, so users aren't orphaned), Windows logins and
         groups, their default language, server roles (user-defined ones created) and server-level
@@ -806,7 +810,7 @@ class Lift:
             notes.append(f"created login {name} (same SID and password, roles and server permissions)")
         return notes
 
-    def reprovision_master_key(self, s, t, db: str, tdb: str) -> List[str]:
+    def reprovision_master_key(self, s: Any, t: Any, db: str, tdb: str) -> List[str]:
         """A restored database's master key isn't encrypted by the target's service master key, so
         certificates and keys in it can't be opened automatically. With the DMK password in
         ``database_master_key_password_env``, open it and add the target's SMK encryption (the step
@@ -893,7 +897,7 @@ class Lift:
             b = dict(tgt_db.query(sql_counts))
             res["tables"] = len(a)
             res["count_mismatches"] = sorted(n for n in set(a) | set(b) if a.get(n) != b.get(n))
-            rnd = random.Random(42)
+            rnd = random.Random(42)  # noqa: S311 (sampling, not security)
             for t in src_db.list_tables():
                 if not t.key_columns or t.row_count == 0:
                     continue

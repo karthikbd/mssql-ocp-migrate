@@ -12,7 +12,7 @@ from .model import Column
 _NULL = b"\x00N"
 
 
-def _join(parts) -> bytes:
+def _join(parts: Any) -> bytes:
     """Length-prefix every field so no two different rows encode the same (a value may contain any byte)."""
     return b"".join(len(p).to_bytes(4, "big") + p for p in parts)
 
@@ -61,7 +61,7 @@ def _for(c: Column) -> Callable[[Any], bytes]:
 
 
 class RowHasher:
-    def __init__(self, columns: Sequence[Column], key_columns: Sequence[str]):
+    def __init__(self, columns: Sequence[Column], key_columns: Sequence[str]) -> None:
         self.norms = [_for(c) for c in columns]
         names = [c.name for c in columns]
         self.key_pos: List[int] = [names.index(k) for k in key_columns]

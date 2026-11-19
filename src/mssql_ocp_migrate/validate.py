@@ -16,7 +16,7 @@ import logging
 import random
 import time
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .adapter import Database
 from .config import Config
@@ -86,7 +86,7 @@ def _norm_definition(text: Optional[str]) -> str:
     return "\n".join(line.rstrip() for line in (text or "").replace("\r\n", "\n").strip().split("\n"))
 
 
-def module_diffs(src_modules, tgt_modules) -> List[str]:
+def module_diffs(src_modules: Any, tgt_modules: Any) -> List[str]:
     """Same text, same ANSI_NULLS / QUOTED_IDENTIFIER, same disabled state and trigger order
     for every view, procedure, function and trigger (not just "it exists")."""
     tm = {(m.kind, m.fqn): m for m in tgt_modules}
@@ -109,7 +109,7 @@ def module_diffs(src_modules, tgt_modules) -> List[str]:
     return out
 
 def _schema_diff(s: Table, t: Optional[Table], options: bool = False, statistics: bool = False,
-                 m=None) -> List[str]:
+                 m: Any = None) -> List[str]:
     """Differences between the source table ``s`` and the target table ``t``. ``m`` (the
     MigrationConfig) switches on the checks for each feature the migration copies."""
     if t is None:
@@ -268,7 +268,7 @@ def _full_compare(src: Database, tgt: Database, table: Table, chunk: Chunk, batc
     h = RowHasher(cols, keys)
     cc = ChunkCheck(chunk.id, "full", True)
     if keys:
-        side: Dict[bytes, tuple] = {}
+        side: Dict[bytes, Tuple[Any, ...]] = {}
         for rows in src.read_rows(table, chunk, batch, ordered=False, columns=cols):
             for r in rows:
                 side[h.key(r)] = (h.digest(r), h.display_key(r))
@@ -305,7 +305,7 @@ def _full_compare(src: Database, tgt: Database, table: Table, chunk: Chunk, batc
     return cc
 
 
-def _check_chunk(cfg: Config, factory, table: Table, chunk: Chunk, full: bool) -> ChunkCheck:
+def _check_chunk(cfg: Config, factory: Any, table: Table, chunk: Chunk, full: bool) -> ChunkCheck:
     from .engine import _db, _drop_connections
     try:
         src, tgt = _db(factory, "source"), _db(factory, "target")
@@ -325,9 +325,9 @@ def _check_chunk(cfg: Config, factory, table: Table, chunk: Chunk, full: bool) -
 
 
 class Validator:
-    def __init__(self, cfg: Config, factory, progress: Optional[Callable[[str], None]] = None):
+    def __init__(self, cfg: Config, factory: Any, progress: Optional[Callable[[str], None]] = None) -> None:
         self.cfg = cfg
-        self.factory = factory
+        self.factory: Callable[[str, bool], Any] = factory
         self.progress = progress or (lambda m: log.info(m))
 
     def _server_diffs(self, src: Database, tgt: Database) -> List[str]:
@@ -401,7 +401,7 @@ class Validator:
             c.source_rows == c.target_rows for c in res.tables.values()) else "MISMATCHES found"))
 
         if mode != "count":
-            rnd = random.Random(20240601)
+            rnd = random.Random(20240601)  # noqa: S311 (sampling, not security)
             jobs = []
             for t in tables:
                 if res.tables[t.fqn].target_rows < 0:

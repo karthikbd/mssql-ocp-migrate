@@ -57,7 +57,7 @@ class Database(ABC):
 
     @abstractmethod
     def read_rows(self, table: Table, chunk: Chunk, batch: int, ordered: bool = True,
-                  columns: Optional[Sequence[Column]] = None) -> Iterator[List[tuple]]:
+                  columns: Optional[Sequence[Column]] = None) -> Iterator[List[Tuple[Any, ...]]]:
         """Rows of ``columns`` (default: table.insert_columns) inside the chunk's key range."""
 
     @abstractmethod
@@ -73,7 +73,7 @@ class Database(ABC):
     def truncate(self, table: Table) -> None: ...
 
     @abstractmethod
-    def bulk_load(self, table: Table, batches: Iterable[Sequence[tuple]], tablock: bool) -> int: ...
+    def bulk_load(self, table: Table, batches: Iterable[Sequence[Tuple[Any, ...]]], tablock: bool) -> int: ...
 
     def prepare(self, table: Table) -> None:
         """Hook called before a chunk transaction starts (e.g. one-off capability probes)."""

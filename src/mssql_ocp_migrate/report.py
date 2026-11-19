@@ -54,7 +54,7 @@ def _e(x: Any) -> str:
     return html.escape(str(x))
 
 
-def _html(cfg: Config, run, validation, est) -> str:
+def _html(cfg: Config, run: Any, validation: Any, est: Any) -> str:
     ok = (run.ok if run is not None else True) and (validation.ok if validation is not None else True)
     rows = []
     status_line = "PASSED" if ok else "FAILED"

@@ -26,7 +26,7 @@ def _value(fdp, t):
     return fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 12))
 
 
-def TestOneInput(data: bytes) -> None:  # noqa: N802 (atheris naming)
+def TestOneInput(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
     types = [TYPES[fdp.ConsumeIntInRange(0, len(TYPES) - 1)] for _ in range(fdp.ConsumeIntInRange(1, 4))]
     cols = [Column(f"c{i}", t) for i, t in enumerate(types)]

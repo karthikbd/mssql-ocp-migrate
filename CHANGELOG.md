@@ -2,6 +2,25 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
+## [Unreleased]
+
+### Security
+- `mssql-migrate schema -o FILE` wrote each certificate's private key together with the one-time password
+  protecting it into the script, so anyone who could read the file could recover the key. The script
+  now leaves private keys out and says how to move them (`migrate` copies them over the connection as
+  before). If you wrote a schema script with `copy_certificates` on, delete it, and consider the
+  certificates' private keys exposed to whoever could read it. Found while writing the threat model.
+
+### Added
+- `GOVERNANCE.md`, `CODE_OF_CONDUCT.md`, `ROADMAP.md`; a security assurance case (threat model, trust
+  boundaries, countermeasures) and a dependency and scanning policy in the developer documentation;
+  support and end-of-life policy, vulnerability response process and secrets policy in `SECURITY.md`;
+  an OpenVEX document (`vex.openvex.json`).
+- Reproducible builds: wheel and sdist are byte-identical when rebuilt from the same commit
+  (`ci/reproducible_sdist.py`, checked in CI).
+- CI: statement-coverage floor of 80%, DCO sign-off check, dependency review on pull requests, `mypy --strict`
+  and the Bandit-derived `ruff` security rules; errors that were silently ignored are now logged at debug level.
+
 ## [0.5.0] - 2026-11-18
 
 Same quality and supply-chain checks as lodestream.

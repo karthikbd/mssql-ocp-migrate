@@ -59,15 +59,40 @@ src = ["src"]
 extend-exclude = ["src/mssql_ocp_migrate/_vendor"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "B", "SIM"]
-ignore = ["B008", "B023", "B027", "B905", "E501", "E731", "SIM105", "SIM115"]
+select = ["E", "F", "W", "B", "SIM", "S", "C4", "PIE", "RUF"]
+ignore = ["B008", "B023", "B027", "B905", "E501", "E731", "SIM105", "SIM115", "RUF001", "RUF002", "RUF003", "C408"]
+
+[tool.ruff.lint.per-file-ignores]
+# T-SQL is built from bracket-quoted identifiers (ddl.q), escaped literals (ddl.lit) and catalog
+# metadata; values from user data are always bound parameters (S608 can't see that)
+"src/mssql_ocp_migrate/*.py" = ["S608"]
+# *_password_env / *_secret_key_env name an environment variable, not a secret
+"src/mssql_ocp_migrate/config.py" = ["S608", "S105"]
+"tests/**" = ["S101", "S105", "S106", "S108", "S110", "S310", "S311", "S603", "S607", "S608", "RUF005", "RUF012", "RUF015", "RUF059"]
 
 [tool.mypy]
 python_version = "3.10"
-strict = false
+strict = true
+warn_unreachable = true
 ignore_missing_imports = true
 exclude = ["src/mssql_ocp_migrate/_vendor/"]
 
 [[tool.mypy.overrides]]
 module = "mssql_ocp_migrate._vendor.*"
 ignore_errors = true      # vendored python-tds, kept as upstream wrote it
+
+[[tool.mypy.overrides]]
+module = "mssql_ocp_migrate.sqlserver"
+disallow_untyped_calls = false   # calls into the vendored driver, whose functions carry no annotations
+
+[tool.coverage.run]
+source = ["mssql_ocp_migrate"]
+omit = ["*/_vendor/*"]
+branch = true
+concurrency = ["thread", "multiprocessing"]   # the copy runs in a process pool
+parallel = true
+sigterm = true
+
+[tool.coverage.report]
+show_missing = false
+skip_covered = true

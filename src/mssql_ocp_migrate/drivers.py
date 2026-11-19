@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import struct
-from typing import Any, Dict, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence, Tuple
 
 from .config import ConnectionConfig
 
@@ -28,7 +28,7 @@ class DriverError(RuntimeError):
 
 def _pyodbc_usable(cfg: ConnectionConfig) -> bool:
     try:
-        import pyodbc  # noqa: F401  (optional, user-provided)
+        import pyodbc
     except Exception:
         return False
     try:
@@ -56,7 +56,7 @@ def choose_driver(cfg: ConnectionConfig) -> str:
 class Connection:
     """Thin DB-API wrapper. SQL is always written with ``?`` placeholders."""
 
-    def __init__(self, raw: Any, driver: str, cfg: ConnectionConfig, autocommit: bool):
+    def __init__(self, raw: Any, driver: str, cfg: ConnectionConfig, autocommit: bool) -> None:
         self.raw = raw
         self.driver = driver
         self.cfg = cfg
@@ -70,7 +70,7 @@ class Connection:
             return sql.replace("?", "%s")        # pymssql leaves bare % alone and does not unescape %%
         return sql
 
-    def _params(self, params: Sequence[Any]) -> tuple:
+    def _params(self, params: Sequence[Any]) -> Tuple[Any, ...]:
         if self.driver == "pymssql":
             # pymssql quotes bytes as a *text* literal ('...'); only bytearray becomes 0x... binary
             return tuple(bytearray(v) if isinstance(v, (bytes, memoryview)) else pymssql_value(v) for v in params)
@@ -99,11 +99,11 @@ class Connection:
                 msg = str(exc).lower()
                 if not any(s in msg for s in ("no results", "not a query", "previous sql")):
                     raise
-            return count
+            return int(count)
         finally:
             cur.close()
 
-    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:
+    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[Tuple[Any, ...]]:
         cur = self.raw.cursor()
         try:
             if params:
@@ -119,7 +119,7 @@ class Connection:
         return rows[0][0] if rows else None
 
     def stream(self, sql: str, params: Optional[Sequence[Any]] = None,
-               batch: int = 10_000) -> Iterator[List[tuple]]:
+               batch: int = 10_000) -> Iterator[List[Tuple[Any, ...]]]:
         cur = self.raw.cursor()
         try:
             if params:
@@ -142,19 +142,19 @@ class Connection:
         if not self.autocommit:
             try:
                 self.raw.rollback()
-            except Exception:  # connection may already be broken
-                pass
+            except Exception:
+                log.debug("ignored error", exc_info=True)
 
     def close(self) -> None:
         try:
             self.raw.close()
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
 
     def __enter__(self) -> "Connection":
         return self
 
-    def __exit__(self, *exc) -> None:
+    def __exit__(self, *exc: Any) -> None:
         self.close()
 
 

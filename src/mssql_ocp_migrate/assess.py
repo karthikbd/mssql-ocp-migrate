@@ -106,7 +106,7 @@ class Assessment:
     def blockers(self) -> List[Finding]:
         return [f for f in self.findings if f.severity == BLOCKER]
 
-    def to_dict(self) -> dict:
+    def to_dict(self) -> Dict[str, Any]:
         return {"source": self.source, "target": self.target, "findings": [asdict(f) for f in self.findings]}
 
 
@@ -134,8 +134,8 @@ def scan_code(objects: Iterable[Tuple[str, str]]) -> List[Finding]:
 class Assessor:
     """Runs the checks against a source database and, when given, the target server."""
 
-    def __init__(self, src, tgt=None, source_db: str = "", target_is_linux: Optional[bool] = None,
-                 lift: bool = False):
+    def __init__(self, src: Any, tgt: Any = None, source_db: str = "", target_is_linux: Optional[bool] = None,
+                 lift: bool = False) -> None:
         self.src, self.tgt, self.db, self.lift = src, tgt, source_db, lift
         self.findings: List[Finding] = []
         self.source: Dict[str, Any] = {}
@@ -146,10 +146,10 @@ class Assessor:
     def add(self, severity: str, area: str, item: str, message: str, fix: str = "") -> None:
         self.findings.append(Finding(severity, area, item, message, fix))
 
-    def _q(self, db, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:
+    def _q(self, db: Any, sql: str, params: Optional[Sequence[Any]] = None) -> List[Tuple[Any, ...]]:
         return [tuple(r) for r in db.query(sql, params)] if params else [tuple(r) for r in db.query(sql)]
 
-    def _one(self, db, sql: str, params=None):
+    def _one(self, db: Any, sql: str, params: Any = None) -> Any:
         rows = self._q(db, sql, params)
         return rows[0][0] if rows else None
 
@@ -187,7 +187,7 @@ class Assessor:
         return Assessment(self.findings, self.source, self.target)
 
     # ------------------------------------------------------------------ facts
-    def _server_facts(self, db) -> Dict[str, Any]:
+    def _server_facts(self, db: Any) -> Dict[str, Any]:
         row = self._q(db, """
             SELECT CAST(SERVERPROPERTY('ProductMajorVersion') AS int), CAST(SERVERPROPERTY('Edition') AS nvarchar(128)),
                    CAST(SERVERPROPERTY('EngineEdition') AS int), CAST(SERVERPROPERTY('Collation') AS nvarchar(128)),
@@ -319,7 +319,7 @@ class Assessor:
                 self.add(INFO, "Database", "log shipping", "the database is a log-shipping primary",
                          "lift reads its log backups (path_map); reconfigure log shipping after cut-over")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         try:
             if self._one(self.src, """SELECT is_remote_data_archive_enabled FROM sys.databases
                                      WHERE name = DB_NAME()"""):
@@ -327,7 +327,7 @@ class Assessor:
                          "Stretch DB is enabled; it's retired and not on Linux",
                          "bring the remote data back (unstretch) before migrating")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
 
     def _encryption(self) -> None:
         try:
@@ -344,7 +344,7 @@ class Assessor:
                          "allows secure-enclave computations; Always Encrypted with secure enclaves isn't supported "
                          "on Linux", "queries that rely on enclaves will fail on the target")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         if self._one(self.src, "SELECT is_encrypted FROM sys.databases WHERE name = DB_NAME()"):
             self.add(INFO, "Security", "TDE",
                      "the database uses TDE" + ("; lift copies the certificate (transfer_tde_certificates)"
@@ -429,32 +429,32 @@ class Assessor:
                 self.add(WARNING, "Server", f"server trigger {name}",
                          "server-level DDL/logon trigger: not migrated by default", "set copy_server_triggers = true")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         try:
             for (name,) in self._q(self.src, """SELECT name FROM master.sys.procedures
                                                WHERE OBJECTPROPERTY(object_id, 'ExecIsStartup') = 1"""):
                 self.add(INFO, "Server", f"startup procedure {name}", "runs at server start; lives in master",
                          "recreate it on the target if the database depends on it")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         try:
             for (name,) in self._q(self.src, "SELECT name FROM sys.server_event_sessions WHERE name NOT IN "
                                              "('system_health', 'AlwaysOn_health', 'telemetry_xevents', 'sp_server_diagnostics session')"):
                 self.add(INFO, "Server", f"Extended Events session {name}", "server-level: not migrated",
                          "recreate it on the target if you need it")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         try:
             if self._one(self.src, "SELECT classifier_function_id FROM sys.resource_governor_configuration"):
                 self.add(INFO, "Server", "Resource Governor", "a classifier function is configured: not migrated")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
         try:
             for (name,) in self._q(self.src, "SELECT name FROM sys.credentials"):
                 self.add(INFO, "Server", f"credential {name}", "secrets can't be read: recreate it if jobs, proxies "
                          "or linked servers use it")
         except Exception:
-            pass
+            log.debug("ignored error", exc_info=True)
 
     def _encrypted_modules(self) -> None:
         for (name,) in self._q(self.src, """SELECT OBJECT_SCHEMA_NAME(object_id) + '.' + OBJECT_NAME(object_id)
@@ -517,7 +517,7 @@ class Assessor:
                      "set TZ (and MSSQL_TIMEZONE) on the SQL Server pod to the source's time zone")
 
     def _configuration(self) -> None:
-        def cfg(db) -> Dict[str, int]:
+        def cfg(db: Any) -> Dict[str, int]:
             return {str(n): int(v) for n, v in self._q(db, """SELECT name, CAST(value_in_use AS int)
                                                              FROM sys.configurations""")}
         s, t = cfg(self.src), cfg(self.tgt)
@@ -548,7 +548,7 @@ class Assessor:
                          "grow the PersistentVolumeClaim before migrating")
 
 
-def assess(src, tgt=None, source_db: str = "", lift: bool = False,
+def assess(src: Any, tgt: Any = None, source_db: str = "", lift: bool = False,
            target_is_linux: Optional[bool] = None) -> Assessment:
     """Run every check. ``src``/``tgt`` are objects with ``query(sql, params=None)``; ``tgt`` may be None."""
     return Assessor(src, tgt, source_db, target_is_linux, lift).run()

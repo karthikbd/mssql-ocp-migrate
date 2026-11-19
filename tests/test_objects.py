@@ -674,7 +674,7 @@ def test_schema_script_contains_every_phase_in_order():
     src = FakeSrc([t, tbl("T_History")], modules=mods, extras=ex)
     script = Migrator(cfg(), factory=lambda s, a: src).schema_script()
     marks = ["CREATE ASSEMBLY", "CREATE PARTITION SCHEME", "CREATE TABLE [dbo].[T]", "-- ===== after data load",
-             "CREATE VIEW", "sp_bindrule", "CREATE MASTER KEY", "CREATE CERTIFICATE", "CREATE USER [signer]",
+             "CREATE VIEW", "sp_bindrule", "CREATE CERTIFICATE", "CREATE USER [signer]",
              "GRANT EXECUTE ON [dbo].[usp]", "ADD SIGNATURE",
              "CREATE SECURITY POLICY", "SYSTEM_VERSIONING = ON", "COMPATIBILITY_LEVEL = 150",
              "ENABLE CHANGE_TRACKING", "sp_cdc_enable_table", "CREATE QUEUE", "GRANT SEND ON SERVICE::[//svc]",
@@ -682,6 +682,9 @@ def test_schema_script_contains_every_phase_in_order():
     pos = [script.index(x) for x in marks]
     assert pos == sorted(pos), list(zip(marks, pos))
     assert "IF SCHEMA_ID(N'audit')" in script
+    # private keys stay out of a script on disk (and so does the master key they would need)
+    assert "PRIVATE KEY (BINARY" not in script and "CREATE MASTER KEY" not in script
+    assert "private key not written to this script" in script
 
 
 # ================================================================== validation

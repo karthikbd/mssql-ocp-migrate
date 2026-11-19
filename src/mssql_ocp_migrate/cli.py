@@ -109,7 +109,7 @@ def _setup_logging(level: str) -> None:
     logging.getLogger("mssql_ocp_migrate._vendor").setLevel(logging.WARNING)
 
 
-def _load(args) -> Config:
+def _load(args: argparse.Namespace) -> Config:
     cfg = Config.load(args.config)
     m = cfg.migration
     if getattr(args, "workers", None):
@@ -140,12 +140,12 @@ def _load(args) -> Config:
     return cfg
 
 
-def cmd_init(args) -> int:
+def cmd_init(args: argparse.Namespace) -> int:
     sys.stdout.write(EXAMPLE_CONFIG)
     return 0
 
 
-def cmd_check(args) -> int:
+def cmd_check(args: argparse.Namespace) -> int:
     from .engine import Migrator, SqlServerFactory
     cfg = _load(args)
     fac = SqlServerFactory(cfg)
@@ -171,7 +171,7 @@ def cmd_check(args) -> int:
     return 0 if ok else 2
 
 
-def cmd_assess(args) -> int:
+def cmd_assess(args: argparse.Namespace) -> int:
     """Readiness assessment: what won't work, or will behave differently, on the target."""
     import dataclasses
     import json
@@ -201,7 +201,7 @@ def cmd_assess(args) -> int:
     return 2 if a.blockers else 0
 
 
-def cmd_sync(args) -> int:
+def cmd_sync(args: argparse.Namespace) -> int:
     """Apply the source's changes (change tracking) to the target after migrate."""
     from .sync import Syncer
     cfg = _load(args)
@@ -220,7 +220,7 @@ def cmd_sync(args) -> int:
     return 0
 
 
-def cmd_estimate(args) -> int:
+def cmd_estimate(args: argparse.Namespace) -> int:
     from .estimate import estimate, format_estimate
     from . import report
     cfg = _load(args)
@@ -231,7 +231,7 @@ def cmd_estimate(args) -> int:
     return 0
 
 
-def cmd_schema(args) -> int:
+def cmd_schema(args: argparse.Namespace) -> int:
     from .engine import Migrator
     cfg = _load(args)
     script = Migrator(cfg).schema_script()
@@ -244,7 +244,7 @@ def cmd_schema(args) -> int:
     return 0
 
 
-def cmd_migrate(args) -> int:
+def cmd_migrate(args: argparse.Namespace) -> int:
     from .engine import Migrator
     from . import report
     cfg = _load(args)
@@ -257,7 +257,7 @@ def cmd_migrate(args) -> int:
     return 0 if run.ok else 1
 
 
-def cmd_finalize(args) -> int:
+def cmd_finalize(args: argparse.Namespace) -> int:
     from .engine import Migrator
     from . import report
     cfg = _load(args)
@@ -268,7 +268,7 @@ def cmd_finalize(args) -> int:
     return 0 if run.ok else 1
 
 
-def cmd_validate(args) -> int:
+def cmd_validate(args: argparse.Namespace) -> int:
     from .chunking import build_chunks
     from .engine import Migrator, SqlServerFactory, _boundaries, _drop_connections
     from .state import State
@@ -289,7 +289,7 @@ def cmd_validate(args) -> int:
     return 0 if res.ok else 1
 
 
-def cmd_lift(args) -> int:
+def cmd_lift(args: argparse.Namespace) -> int:
     from .physical import Lift, format_plan
     cfg = _load(args)
     if args.databases:
@@ -348,7 +348,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--log-level", default="INFO")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    def common(sp, workers=True):
+    def common(sp: argparse.ArgumentParser, workers: bool=True) -> None:
         sp.add_argument("-c", "--config", required=True, help="TOML or JSON config file")
         sp.add_argument("--include", nargs="+", help="override include globs (schema.table)")
         sp.add_argument("--exclude", nargs="+", help="additional exclude globs")
@@ -424,7 +424,7 @@ def main(argv: Optional[List[str]] = None) -> int:
     args = build_parser().parse_args(argv)
     _setup_logging(args.log_level)
     try:
-        return args.fn(args)
+        return int(args.fn(args))
     except (ConfigError, FileNotFoundError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

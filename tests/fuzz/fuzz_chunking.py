@@ -25,7 +25,7 @@ def _unquote(s: str) -> str:
     return "".join(out)
 
 
-def TestOneInput(data: bytes) -> None:  # noqa: N802 (atheris naming)
+def TestOneInput(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
     name = fdp.ConsumeUnicodeNoSurrogates(fdp.ConsumeIntInRange(0, 20))
     assert _unquote(q(name)) == name

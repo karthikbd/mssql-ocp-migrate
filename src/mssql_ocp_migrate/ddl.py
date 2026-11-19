@@ -13,7 +13,7 @@ Order used by the engine (fast loads, then constraints that check the loaded dat
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Dict, List, Optional
+from typing import Any, Dict, List, Optional, Sequence, Set, Tuple
 
 from .model import (CdcTable, Certificate, CheckConstraint, Column, DatabaseSettings, ExtendedProperty,
                     ForeignKey, Index, Permission, Principal, SecurityPolicy, Signature, Statistic, Table)
@@ -96,7 +96,7 @@ def column_sql(c: Column, masking: bool = True, named_default: bool = True) -> s
     return " ".join(parts)
 
 
-def _cols(cols) -> str:
+def _cols(cols: Sequence[Tuple[str, bool]]) -> str:
     return ", ".join(f"{q(c)}{' DESC' if desc else ''}" for c, desc in cols)
 
 
@@ -119,7 +119,7 @@ def storage_options(ix: Index) -> List[str]:
     return out
 
 
-def compression_options(compression: str, per_partition) -> List[str]:
+def compression_options(compression: str, per_partition: Optional[Dict[int, str]]) -> List[str]:
     """DATA_COMPRESSION, per partition when the partitions differ."""
     if per_partition:
         groups: Dict[str, List[str]] = {}
@@ -274,14 +274,14 @@ def disabled_indexes_sql(t: Table, partitions: bool = True) -> List[str]:
     return out
 
 
-def xml_index_sql(t: Table, xi) -> str:
+def xml_index_sql(t: Table, xi: Any) -> str:
     if xi.primary:
         return f"CREATE PRIMARY XML INDEX {q(xi.name)} ON {qt(t)} ({q(xi.column)})"
     return (f"CREATE XML INDEX {q(xi.name)} ON {qt(t)} ({q(xi.column)}) USING XML INDEX {q(xi.using)} "
             f"FOR {xi.secondary_type}")
 
 
-def spatial_index_sql(t: Table, si) -> str:
+def spatial_index_sql(t: Table, si: Any) -> str:
     opts = []
     if si.bounding_box and si.tessellation.startswith("GEOMETRY"):
         opts.append("BOUNDING_BOX = (" + ", ".join(repr(float(v)) for v in si.bounding_box) + ")")
@@ -481,7 +481,7 @@ def strip_outer_parens(expr: str) -> str:
     return s
 
 
-def security_policy_sql(p: SecurityPolicy, tables: Optional[set] = None, enabled: bool = False) -> Optional[str]:
+def security_policy_sql(p: SecurityPolicy, tables: Optional[Set[Any]] = None, enabled: bool = False) -> Optional[str]:
     """CREATE SECURITY POLICY, created disabled so it can't hide rows from validation; it's
     switched to the source's state at the very end (``policy_state_sql``)."""
     preds = []
@@ -533,7 +533,7 @@ def cdc_sql(tables: List[CdcTable]) -> List[str]:
 
 
 # ------------------------------------------------------------------ modules
-def module_statements(mod) -> List[str]:
+def module_statements(mod: Any) -> List[str]:
     """Statements that recreate one module exactly as the source has it: under the source's
     ANSI_NULLS / QUOTED_IDENTIFIER settings (they are compiled into the module: ANSI_NULLS OFF
     makes ``= NULL`` true for NULLs, QUOTED_IDENTIFIER OFF makes "x" a string), then its disabled
@@ -549,7 +549,7 @@ def module_statements(mod) -> List[str]:
         before.append("SET QUOTED_IDENTIFIER OFF")
         after.append("SET QUOTED_IDENTIFIER ON")
     # the text goes over byte for byte: a module signature (ADD SIGNATURE) covers it, whitespace included
-    out = before + [mod.definition] + after
+    out = [*before, mod.definition, *after]
     if mod.kind == "TRIGGER" and mod.disabled and mod.parent:
         out.append(f"DISABLE TRIGGER {q(mod.schema)}.{q(mod.name)} ON "
                    + ".".join(q(p) for p in mod.parent.split(".", 1)))

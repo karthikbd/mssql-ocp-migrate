@@ -9,8 +9,15 @@ under ``mssql_ocp_migrate._vendor``. pyodbc is used only if it is already instal
 """
 __version__ = "0.5.0"
 
-from .config import Config, ConnectionConfig, MigrationConfig, ValidationConfig  # noqa: E402
-from .engine import Migrator, RunResult  # noqa: E402
+from .config import Config, ConnectionConfig, MigrationConfig, ValidationConfig
+from .engine import Migrator, RunResult
 
-__all__ = ["Config", "ConnectionConfig", "MigrationConfig", "ValidationConfig", "Migrator", "RunResult",
-           "__version__"]
+__all__ = [
+           "Config",
+           "ConnectionConfig",
+           "MigrationConfig",
+           "Migrator",
+           "RunResult",
+           "ValidationConfig",
+           "__version__",
+]

@@ -102,7 +102,7 @@ def _pk(t: Table) -> Index:
     return t.primary_key
 
 
-def changes_sql(src, t: Table) -> str:
+def changes_sql(src: Any, t: Table) -> str:
     """Every key changed since a version, with the source's current row if it still exists."""
     keys = [c for c, _ in _pk(t).columns]
     cols = t.insert_columns
@@ -117,7 +117,7 @@ def changes_sql(src, t: Table) -> str:
 
 
 class Syncer:
-    def __init__(self, cfg: Config, factory=None, progress: Optional[Callable[[str], None]] = None):
+    def __init__(self, cfg: Config, factory: Any = None, progress: Optional[Callable[[str], None]] = None) -> None:
         from .engine import SqlServerFactory
         self.cfg = cfg
         self.factory = factory or SqlServerFactory(cfg)
@@ -174,7 +174,7 @@ class Syncer:
         return res
 
     # -------------------------------------------------------------- one table
-    def _apply(self, src, tgt, t: Table, since: int) -> Dict[str, int]:
+    def _apply(self, src: Any, tgt: Any, t: Table, since: int) -> Dict[str, int]:
         nkeys = len(_pk(t).columns)
         rows = src.query(changes_sql(src, t), [since])
         if not rows:
@@ -193,7 +193,7 @@ class Syncer:
         return {"deleted": len(keys) - len(present), "upserted": len(present)}
 
     @staticmethod
-    def _delete_keys(tgt, t: Table, keys: List[Tuple[Any, ...]], batch: int = 300) -> None:
+    def _delete_keys(tgt: Any, t: Table, keys: List[Tuple[Any, ...]], batch: int = 300) -> None:
         cols = [t.column(c) for c, _ in _pk(t).columns]
         cond = "(" + " AND ".join(f"{q(c.name)} = CAST(? AS {type_sql(c)})" for c in cols) + ")"
         per = max(1, min(batch, 2000 // max(1, len(cols))))
@@ -204,7 +204,7 @@ class Syncer:
 
     # -------------------------------------------------------------- constraints and triggers
     @staticmethod
-    def _disable_fks(tgt, tables: List[Table]) -> List[Tuple[str, str, str]]:
+    def _disable_fks(tgt: Any, tables: List[Table]) -> List[Tuple[str, str, str]]:
         names = {(t.schema, t.name) for t in tables}
         fks = [(s, n, fk) for s, n, fk, rs, rn in tgt.query("""
             SELECT OBJECT_SCHEMA_NAME(parent_object_id), OBJECT_NAME(parent_object_id), name,
@@ -216,14 +216,14 @@ class Syncer:
         return fks
 
     @staticmethod
-    def _enable_fks(tgt, fks: List[Tuple[str, str, str]], trust: bool) -> None:
+    def _enable_fks(tgt: Any, fks: List[Tuple[str, str, str]], trust: bool) -> None:
         for s, n, fk in fks:
             # between passes: enabled but not re-validated (cheap); final pass: re-validated (trusted)
             tgt.execute(f"ALTER TABLE {q(s)}.{q(n)} {'WITH CHECK ' if trust else ''}CHECK CONSTRAINT {q(fk)}")
         tgt.commit()
 
     @staticmethod
-    def _disable_triggers(tgt, tables: List[Table]) -> List[Tuple[str, str, str]]:
+    def _disable_triggers(tgt: Any, tables: List[Table]) -> List[Tuple[str, str, str]]:
         names = {(t.schema, t.name) for t in tables}
         trs = [(s, n, tr) for s, n, tr in tgt.query("""
             SELECT OBJECT_SCHEMA_NAME(parent_id), OBJECT_NAME(parent_id), name FROM sys.triggers
@@ -234,12 +234,12 @@ class Syncer:
         return trs
 
     @staticmethod
-    def _enable_triggers(tgt, trs: List[Tuple[str, str, str]]) -> None:
+    def _enable_triggers(tgt: Any, trs: List[Tuple[str, str, str]]) -> None:
         for s, n, tr in trs:
             tgt.execute(f"ENABLE TRIGGER {q(s)}.{q(tr)} ON {q(s)}.{q(n)}")
         tgt.commit()
 
-    def _finalize(self, src, tgt, tables: List[Table]) -> None:
+    def _finalize(self, src: Any, tgt: Any, tables: List[Table]) -> None:
         for t in tables:
             cur = src.identity_current(t)
             if cur is not None:
@@ -251,7 +251,7 @@ class Syncer:
         tgt.commit()
 
 
-def enable_change_tracking(src, tables: List[Table], retention_days: int = 7) -> List[str]:
+def enable_change_tracking(src: Any, tables: List[Table], retention_days: int = 7) -> List[str]:
     """Turn change tracking on for the source database and every table with a primary key
     (sync_enable_change_tracking). This changes the source; it's opt-in."""
     done = []

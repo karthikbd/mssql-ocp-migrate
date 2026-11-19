@@ -2,9 +2,10 @@
 from __future__ import annotations
 
 import logging
+import random
 import threading
 import uuid
-from typing import Any, Dict, Iterable, Iterator, List, Optional, Sequence, Tuple
+from typing import Any, Callable, Dict, Iterable, Iterator, List, Optional, Sequence, Set, Tuple
 
 from . import chunking
 from .adapter import Database
@@ -25,7 +26,7 @@ _probe_cache: Dict[str, str] = {}
 
 
 class SqlServer(CatalogMixin, Database):
-    def __init__(self, cfg: ConnectionConfig, label: str, autocommit: bool = True):
+    def __init__(self, cfg: ConnectionConfig, label: str, autocommit: bool = True) -> None:
         self.cfg = cfg
         self.label = label
         self.conn: Connection = connect(cfg, autocommit=autocommit)
@@ -42,7 +43,7 @@ class SqlServer(CatalogMixin, Database):
     def execute(self, sql: str, params: Optional[Sequence[Any]] = None) -> None:
         self.conn.execute(sql, params)
 
-    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:
+    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[Tuple[Any, ...]]:
         return self.conn.query(sql, params)
 
     def commit(self) -> None:
@@ -143,7 +144,7 @@ class SqlServer(CatalogMixin, Database):
             self._identity_strategy()
 
     def read_rows(self, table: Table, chunk: Chunk, batch: int,
-                  ordered: bool = True, columns: Optional[Sequence[Column]] = None) -> Iterator[List[tuple]]:
+                  ordered: bool = True, columns: Optional[Sequence[Column]] = None) -> Iterator[List[Tuple[Any, ...]]]:
         cols = list(columns) if columns is not None else table.insert_columns
         where, params = self._where(table, chunk)
         order = ""
@@ -189,7 +190,7 @@ class SqlServer(CatalogMixin, Database):
             f"CHECKSUM_AGG(BINARY_CHECKSUM({exprs})) FROM {self._src(table)} WHERE {where}", params)[0]
         return int(row[0]), (int(row[1] or 0), int(row[2] or 0))
 
-    def random_key(self, table: Table, rnd) -> Optional[Tuple[Any, ...]]:
+    def random_key(self, table: Table, rnd: random.Random) -> Optional[Tuple[Any, ...]]:
         """A random existing key, cheaply (TABLESAMPLE reads a few pages, not the table)."""
         kl = ", ".join(q(k) for k in table.key_columns)
         pct = min(100.0, max(0.0001, 100.0 * 2000 / max(table.row_count, 1)))
@@ -241,7 +242,7 @@ class SqlServer(CatalogMixin, Database):
                      " WITH NO_INFOMSGS")
 
     # ------------------------------------------------------------- bulk load
-    def bulk_load(self, table: Table, batches: Iterable[Sequence[tuple]], tablock: bool) -> int:
+    def bulk_load(self, table: Table, batches: Iterable[Sequence[Tuple[Any, ...]]], tablock: bool) -> int:
         cols = table.insert_columns
         tablock = tablock and not table.memory_optimized       # TABLOCK isn't allowed on memory-optimized tables
         if table.has_encrypted and self.driver != "pytds":
@@ -270,7 +271,7 @@ class SqlServer(CatalogMixin, Database):
             if strategy == ID_SET_INSERT_BULK:
                 self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} OFF")
 
-    def _bulk_metadata(self, target_name: str, table: Optional[Table], cols: Sequence[Column]):
+    def _bulk_metadata(self, target_name: str, table: Optional[Table], cols: Sequence[Column]) -> Any:
         """Column metadata for INSERT BULK, built from catalog metadata (no extra round trip)."""
         from ._vendor.pytds import tds_base
         out = []
@@ -286,13 +287,13 @@ class SqlServer(CatalogMixin, Database):
         return out
 
     def _insert_bulk_pytds(self, target_name: str, table: Optional[Table], cols: Sequence[Column],
-                           batches: Iterable[Sequence[tuple]], tablock: bool) -> int:
+                           batches: Iterable[Sequence[Tuple[Any, ...]]], tablock: bool) -> int:
         from ._vendor.pytds import tds_base
         meta = self._bulk_metadata(target_name, table, cols)
         coerce = _coercers(cols)
         counter = [0]
 
-        def rows():
+        def rows() -> Any:
             for batch in batches:
                 for r in batch:
                     counter[0] += 1
@@ -324,7 +325,7 @@ class SqlServer(CatalogMixin, Database):
         return counter[0]
 
     def _load_rows_pytds(self, table: Table, cols: Sequence[Column],
-                         batches: Iterable[Sequence[tuple]], identity: bool) -> int:
+                         batches: Iterable[Sequence[Tuple[Any, ...]]], identity: bool) -> int:
         """Fallback: parameterised multi-row INSERT (always correct, slower)."""
         per_stmt = max(1, min(1000, 2000 // max(1, len(cols))))
         collist = ", ".join(q(c.name) for c in cols)
@@ -365,7 +366,7 @@ class SqlServer(CatalogMixin, Database):
         return n
 
     def _load_pyodbc(self, table: Table, cols: Sequence[Column],
-                     batches: Iterable[Sequence[tuple]], identity: bool,
+                     batches: Iterable[Sequence[Tuple[Any, ...]]], identity: bool,
                      target_name: Optional[str] = None) -> int:
         collist = ", ".join(q(c.name) for c in cols)
         ph = ", ".join(_pyodbc_placeholder(c) for c in cols)
@@ -389,13 +390,13 @@ class SqlServer(CatalogMixin, Database):
                 try:
                     cur.execute(f"SET IDENTITY_INSERT {self.qualified(table)} OFF")
                 except Exception:
-                    pass
+                    log.debug("ignored error", exc_info=True)
             cur.close()
         return n
 
     # ---------------------------------------------------------------- pymssql
     def _pymssql_bulk(self, target_name: str, column_ids: Sequence[int], cols: Sequence[Column],
-                      batches: Iterable[Sequence[tuple]], tablock: bool) -> int:
+                      batches: Iterable[Sequence[Tuple[Any, ...]]], tablock: bool) -> int:
         """FreeTDS bulk copy (INSERT BULK) through pymssql, one call per batch."""
         coerce = _pymssql_coercers(cols)
         n = 0
@@ -408,7 +409,7 @@ class SqlServer(CatalogMixin, Database):
             n += len(rows)
         return n
 
-    def _load_pymssql(self, table: Table, cols: Sequence[Column], batches: Iterable[Sequence[tuple]],
+    def _load_pymssql(self, table: Table, cols: Sequence[Column], batches: Iterable[Sequence[Tuple[Any, ...]]],
                       identity: bool, strategy: str, tablock: bool) -> int:
         """Bulk copy when it is provably safe, else multi-row INSERT.
 
@@ -436,7 +437,7 @@ class SqlServer(CatalogMixin, Database):
                 try:
                     self.execute(f"SET IDENTITY_INSERT {self.qualified(table)} OFF")
                 except Exception:
-                    pass
+                    log.debug("ignored error", exc_info=True)
 
     def _identity_strategy(self) -> str:
         """Find, once per target server, how INSERT BULK keeps explicit identity values.
@@ -480,7 +481,7 @@ class SqlServer(CatalogMixin, Database):
             return chosen
 
 
-def pytds_type(c: Column):
+def pytds_type(c: Column) -> Any:
     """Map catalog metadata to the bundled driver's SQL type objects (used for INSERT BULK)."""
     from ._vendor.pytds import tds_types as T
     t = c.type_name.lower()
@@ -528,7 +529,7 @@ def pytds_type(c: Column):
     raise ValueError(f"unsupported column type {c.type_name} ({c.name})")
 
 
-def _name_bulk_column(exc: Exception, meta) -> Exception:
+def _name_bulk_column(exc: Exception, meta: Any) -> Exception:
     """SQL Server reports bulk errors by 'colid N' (position in the INSERT BULK list); add the
     column's name and declared type so the error says which column it is."""
     import re
@@ -555,7 +556,7 @@ def variant_read_expr(qc: str) -> str:
     """sql_variant as text 'basetype|precision|scale|maxlength|collation|value' so nothing about
     the value is lost: text keeps its characters (and collation), every other base type travels
     as its exact binary form."""
-    prop = lambda p, n: f"CAST(SQL_VARIANT_PROPERTY({qc}, '{p}') AS nvarchar({n}))"   # noqa: E731
+    prop = lambda p, n: f"CAST(SQL_VARIANT_PROPERTY({qc}, '{p}') AS nvarchar({n}))"
     return (f"CASE WHEN {qc} IS NULL THEN NULL ELSE CONCAT({prop('BaseType', 32)}, N'|', {prop('Precision', 8)}, "
             f"N'|', {prop('Scale', 8)}, N'|', {prop('MaxLength', 8)}, N'|', ISNULL({prop('Collation', 128)}, N''), "
             f"N'|', CASE WHEN CAST(SQL_VARIANT_PROPERTY({qc}, 'BaseType') AS sysname) IN "
@@ -604,7 +605,7 @@ def _fixed_size_clr(c: Column) -> bool:
     return (c.clr_udt or c.type_name.lower() == "hierarchyid") and 0 < c.max_length <= 8000
 
 
-def _binary_serializer_class():
+def _binary_serializer_class() -> Any:
     from ._vendor.pytds import tds_base, tds_types
 
     class BinarySerializer(tds_types.VarBinarySerializer):
@@ -612,20 +613,20 @@ def _binary_serializer_class():
         and SQL Server rejects VARBINARY metadata for a BINARY column ("Invalid column type")."""
         type = tds_base.XSYBBINARY
 
-        def __repr__(self):
+        def __repr__(self) -> str:
             return f"Binary({self.size})"
 
     return BinarySerializer
 
 
-def _VarBinaryMaxColumn(**kw):
+def _VarBinaryMaxColumn(**kw: Any) -> Any:
     """varbinary(max) for INSERT BULK, written with an unknown PLP length. The bundled driver
     writes the actual length, which breaks the bulk row stream (the server then reports invalid
     lengths in the following columns); it already uses PLP_UNKNOWN for (n)varchar(max)."""
     from ._vendor.pytds import tds_base, tds_types
 
     class VarBinaryMaxBulkSerializer(tds_types.VarBinarySerializerMax):
-        def write(self, w, val):
+        def write(self, w: Any, val: Any) -> None:
             if val is None:
                 w.put_uint8(tds_base.PLP_NULL)
                 return
@@ -636,25 +637,25 @@ def _VarBinaryMaxColumn(**kw):
             w.put_uint(0)
 
     class VarBinaryMaxColumn(tds_base.Column):
-        def choose_serializer(self, type_factory, collation):
+        def choose_serializer(self, type_factory: Any, collation: Any) -> Any:
             return VarBinaryMaxBulkSerializer()
 
     return VarBinaryMaxColumn(**kw)
 
 
-def _BinaryColumn(size: int, **kw):
+def _BinaryColumn(size: int, **kw: Any) -> Any:
     from ._vendor.pytds import tds_base, tds_types
     ser = _binary_serializer_class()
 
     class BinaryColumn(tds_base.Column):
-        def choose_serializer(self, type_factory, collation):
+        def choose_serializer(self, type_factory: Any, collation: Any) -> Any:
             return ser(size)
 
     return BinaryColumn(type=tds_types.BinaryType(size=size), **kw)
 
 
-_PYMSSQL_NO_BULK: set = set()
-_PYTDS_NO_BULK: set = set()
+_PYMSSQL_NO_BULK: Set[str] = set()
+_PYTDS_NO_BULK: Set[str] = set()
 _BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size", "Bulk load data was expected but not sent")
 _LEGACY_LOB = ("text", "ntext", "image",
                "json", "vector")      # SQL Server 2025 types: bulk metadata for them isn't settled; INSERT converts
@@ -692,7 +693,7 @@ def _utf8_char(c: Column) -> bool:
     return c.type_name.lower() in ("varchar", "char") and "UTF8" in (c.collation or "").upper()
 
 
-def _pymssql_coercers(cols: Sequence[Column]):
+def _pymssql_coercers(cols: Sequence[Column]) -> List[Callable[[Any], Any]]:
     """Values FreeTDS bulk copy converts reliably: GUIDs and temporal values as text."""
     from .drivers import pymssql_value
     out = []
@@ -704,7 +705,7 @@ def _pymssql_coercers(cols: Sequence[Column]):
     return out
 
 
-def _coercers(cols: Sequence[Column]):
+def _coercers(cols: Sequence[Column]) -> Optional[List[Callable[[Any], Any]]]:
     """Per-column value fixes when source and target drivers differ (e.g. GUID as str vs UUID)."""
     fns = []
     needed = False

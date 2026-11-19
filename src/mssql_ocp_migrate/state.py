@@ -53,7 +53,7 @@ def decode_key(key: Optional[List[Any]]) -> Optional[Tuple[Any, ...]]:
 
 
 class State:
-    def __init__(self, path: str):
+    def __init__(self, path: str) -> None:
         self.path = Path(path)
         self.data: Dict[str, Any] = {"version": 1, "created": time.time(), "tables": {}, "phases": {}}
 
@@ -95,7 +95,7 @@ class State:
 
     def chunk_done(self, chunk: Chunk) -> bool:
         t = self.data["tables"].get(chunk.table, {}).get("chunks", {})
-        return t.get(str(chunk.index), {}).get("status") == "done"
+        return bool(t.get(str(chunk.index), {}).get("status") == "done")
 
     def record(self, chunk: Chunk, rows: int, seconds: float, status: str, error: Optional[str] = None) -> None:
         entry = self.data["tables"][chunk.table]["chunks"][str(chunk.index)]

@@ -209,7 +209,7 @@ class Config:
     # ---------------------------------------------------------------- loading
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
-        def build(dc, raw, section):
+        def build(dc: Any, raw: Any, section: str) -> Any:
             if raw is None:
                 raw = {}
             if not isinstance(raw, dict):

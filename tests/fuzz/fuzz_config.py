@@ -67,7 +67,7 @@ def _check(doc) -> None:
     cfg.selects("dbo", "t")
 
 
-def TestOneInput(data: bytes) -> None:  # noqa: N802 (atheris naming)
+def TestOneInput(data: bytes) -> None:
     fdp = atheris.FuzzedDataProvider(data)
     if fdp.ConsumeBool():
         _check(_structured(fdp))
