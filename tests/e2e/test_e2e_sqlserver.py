@@ -35,6 +35,23 @@ def conn_cfg(side: str, database: str) -> ConnectionConfig:
                             driver=E("E2E_DRIVER", "auto"), login_timeout=60)
 
 
+def _diagnose(database: str) -> None:
+    """Session state and a few probe queries on a fresh target connection, printed for CI logs."""
+    for autocommit in (True, False):
+        c = connect(conn_cfg("target", database), autocommit=autocommit)
+        try:
+            for sql in ("SELECT @@TRANCOUNT, XACT_STATE(), @@OPTIONS, @@VERSION",
+                        "SELECT COUNT_BIG(*) FROM dbo.[Session] WITH (SNAPSHOT)",
+                        "SELECT COUNT_BIG(*) FROM dbo.[Session]",
+                        "SELECT COUNT_BIG(*) FROM sales.Customer"):
+                try:
+                    print(f"diag autocommit={autocommit}: {sql} -> {c.query(sql)}", flush=True)
+                except Exception as exc:
+                    print(f"diag autocommit={autocommit}: {sql} -> {type(exc).__name__}: {exc}", flush=True)
+        finally:
+            c.close()
+
+
 def run_script(side: str, path: Path) -> None:
     c = connect(conn_cfg(side, "master"), autocommit=True)
     try:
@@ -95,6 +112,7 @@ def migrated(tmp_path_factory):
         run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
     except Exception:
         traceback.print_exc()        # now, not in the summary: a later test may hang and lose it
+        _diagnose("e2e_tgt")
         raise
     print("run warnings:", *run.warnings, sep="\n  ", flush=True)
     print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
