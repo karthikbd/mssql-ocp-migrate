@@ -368,21 +368,28 @@ class SqlServer(CatalogMixin, Database):
                      batches: Iterable[Sequence[tuple]], identity: bool,
                      target_name: Optional[str] = None) -> int:
         collist = ", ".join(q(c.name) for c in cols)
-        ph = ", ".join("?" for _ in cols)
+        ph = ", ".join(_pyodbc_placeholder(c) for c in cols)
         sql = f"INSERT INTO {target_name or self.qualified(table)} ({collist}) VALUES ({ph})"
         cur = self.conn.raw.cursor()
         cur.fast_executemany = True
         n = 0
+        identity_on = False
         try:
             if identity:
                 cur.execute(f"SET IDENTITY_INSERT {self.qualified(table)} ON")
+                identity_on = True
             for batch in batches:
                 if batch:
                     cur.executemany(sql, batch)
                     n += len(batch)
-            if identity:
-                cur.execute(f"SET IDENTITY_INSERT {self.qualified(table)} OFF")
         finally:
+            if identity_on:
+                # always, also after a failure: IDENTITY_INSERT is per session, and a pooled connection
+                # left with it ON makes the next table's chunk fail
+                try:
+                    cur.execute(f"SET IDENTITY_INSERT {self.qualified(table)} OFF")
+                except Exception:
+                    pass
             cur.close()
         return n
 
@@ -651,6 +658,28 @@ _PYTDS_NO_BULK: set = set()
 _BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size", "Bulk load data was expected but not sent")
 _LEGACY_LOB = ("text", "ntext", "image",
                "json", "vector")      # SQL Server 2025 types: bulk metadata for them isn't settled; INSERT converts
+
+
+def _pyodbc_placeholder(c: Column) -> str:
+    """Give the parameter the type the value travels as (see select_exprs).
+
+    With fast_executemany pyodbc sizes its buffers from the *target* column: text/ntext/image are
+    described as 2 GB (MemoryError), and CLR columns as types a str or bytes value can't be cast to.
+    A CAST makes SQL Server describe the transport type instead; the INSERT converts to the column."""
+    t = c.type_name.lower()
+    if t == "hierarchyid" and not c.clr_udt:
+        return "CAST(? AS nvarchar(4000))"
+    if c.is_clr or t == "image":
+        return "CAST(? AS varbinary(max))"
+    if t == "text":
+        return "CAST(? AS varchar(max))"
+    if t == "ntext":
+        return "CAST(? AS nvarchar(max))"
+    if t == "datetime":
+        return "CAST(? AS nvarchar(30))"          # read as ISO 8601 text (style 126)
+    if t in ("json", "vector"):
+        return "CAST(? AS nvarchar(max))"         # SQL Server 2025: travel as their JSON text
+    return "?"
 
 
 _PYMSSQL_INSERT_TYPES = ("xml", "sql_variant", "datetimeoffset", "datetime", "smalldatetime")
