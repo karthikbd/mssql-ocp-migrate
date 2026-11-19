@@ -86,6 +86,8 @@ def test_utf8_varchar_is_read_as_nvarchar_with_pymssql():
             Column("m", "varchar", max_length=-1, collation="Latin1_General_100_CI_AS_SC_UTF8"),
             Column("l", "varchar", max_length=60, collation="Latin1_General_CI_AS")]
     assert db.select_exprs(None, cols) == ["CAST([u] AS nvarchar(60))", "CAST([m] AS nvarchar(max))", "[l]"]
+    db.driver = "pyodbc"
+    assert db.select_exprs(None, cols)[:2] == ["CAST([u] AS nvarchar(60))", "CAST([m] AS nvarchar(max))"]
     db.driver = "pytds"
     assert db.select_exprs(None, cols) == ["[u]", "[m]", "[l]"]
 

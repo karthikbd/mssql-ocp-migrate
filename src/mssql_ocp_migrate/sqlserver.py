@@ -98,9 +98,9 @@ class SqlServer(CatalogMixin, Database):
                 out.append(f"CAST({qc} AS nvarchar(40))")
             elif t == "datetime":
                 out.append(f"CONVERT(nvarchar(30), {qc}, 126)")
-            elif self.driver == "pymssql" and _utf8_char(c):
-                # FreeTDS decodes varchar with the server code page, which mangles UTF-8 collations;
-                # nvarchar (UTF-16) arrives intact and converts back exactly on insert
+            elif self.driver in ("pymssql", "pyodbc") and _utf8_char(c):
+                # FreeTDS and the ODBC driver convert varchar through a client code page, which
+                # mangles UTF-8 collations; nvarchar (UTF-16) arrives intact and converts back exactly
                 out.append(f"CAST({qc} AS nvarchar({'max' if c.max_length == -1 else c.max_length}))")
             elif t == "sql_variant":
                 out.append(variant_read_expr(qc))
