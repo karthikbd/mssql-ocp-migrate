@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mssql-ocp-migrate"
-version = "0.4.0"
+version = "0.5.0"
 description = "Migrate SQL Server databases to SQL Server on OpenShift (or anywhere) with parallel chunked copy, resume and end-to-end validation. Zero dependencies: the TDS driver is bundled."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -51,3 +51,23 @@ mssql_ocp_migrate = ["_vendor/LICENSE-python-tds.txt", "py.typed"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 filterwarnings = ["ignore::DeprecationWarning:mssql_ocp_migrate._vendor"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py310"
+src = ["src"]
+extend-exclude = ["src/mssql_ocp_migrate/_vendor"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "B", "SIM"]
+ignore = ["B008", "B023", "B027", "B905", "E501", "E731", "SIM105", "SIM115"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = false
+ignore_missing_imports = true
+exclude = ["src/mssql_ocp_migrate/_vendor/"]
+
+[[tool.mypy.overrides]]
+module = "mssql_ocp_migrate._vendor.*"
+ignore_errors = true      # vendored python-tds, kept as upstream wrote it

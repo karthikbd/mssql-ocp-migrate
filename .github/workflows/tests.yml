@@ -26,6 +26,8 @@ jobs:
         run: |
           pip install --require-hashes -r ci/requirements-test.txt
           pip install --no-deps -e .
+      - run: ruff check src tests
+      - run: mypy src
       - run: python -m pytest tests/ -q --tb=short
 
   docs:

@@ -1,5 +1,23 @@
 # Release notes
 
+## 0.5.0 (November 2026)
+
+The same quality and supply-chain checks as lodestream, and two fixes found by fuzzing:
+
+- **Full validation could miss a difference.** Row fingerprints joined column values with a
+  separator byte that the values themselves may contain, so two different rows could fingerprint
+  the same (for example text `"x\x1esy", "z"` and `"x", "y\x1esz"`), and two different keys could
+  collide. Every value is now length-prefixed.
+- **Wrong value types in the configuration** (`port = "1433"`, `include = "dbo.*"`, a section
+  that isn't a table) are rejected at start-up with a message naming the setting and the expected
+  type, instead of failing later. `compatibility_level` accepts `150` or `"150"`.
+- **Fuzzing** with ClusterFuzzLite (Atheris) on every pull request, push and daily: config
+  loading, row fingerprints, chunk predicates and identifier quoting.
+- **All three drivers end to end:** every SQL Server version pair now runs with the bundled
+  pytds, pyodbc + Microsoft ODBC Driver 18, and pymssql.
+- `ruff` and `mypy` in CI, `CONTRIBUTING.md`, private vulnerability reporting and an OpenSSF Best
+  Practices badge.
+
 ## 0.4.0 (November 2026)
 
 **Gaps found against other migration tools**: dbatools, Microsoft's migration tooling (DMA, Azure

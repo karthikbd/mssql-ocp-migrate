@@ -1,7 +1,8 @@
 name: End-to-end (SQL Server)
 
 # Runs the e2e suite against two real SQL Server containers (source and target) for each version pair, the same
-# setup as tests/e2e/docker-compose.yml: a full logical migration with validation, then lift.
+# setup as tests/e2e/docker-compose.yml: a full logical migration with validation, then lift. Each pair runs with
+# every driver: the bundled pytds, pyodbc + Microsoft ODBC Driver 18, and pymssql.
 on:
   push:
     branches: ["main", "release/**"]
@@ -17,7 +18,7 @@ concurrency:
 
 jobs:
   e2e:
-    name: e2e ${{ matrix.name }}
+    name: e2e ${{ matrix.pair.name }} (${{ matrix.driver }})
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -25,14 +26,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include:
+        pair:
           - {name: "2022 -> 2022", source: "2022-latest", target: "2022-latest"}
           - {name: "2019 -> 2022", source: "2019-latest", target: "2022-latest"}
           - {name: "2022 -> 2025", source: "2022-latest", target: "2025-latest"}
           - {name: "2025 -> 2025", source: "2025-latest", target: "2025-latest"}
+        driver: ["pytds", "pyodbc", "pymssql"]
     env:
-      SOURCE_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.source }}
-      TARGET_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.target }}
+      SOURCE_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.pair.source }}
+      TARGET_IMAGE: mcr.microsoft.com/mssql/server:${{ matrix.pair.target }}
+      E2E_DRIVER: ${{ matrix.driver }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -44,6 +47,20 @@ jobs:
         run: |
           pip install --require-hashes -r ci/requirements-test.txt
           pip install --no-deps -e .
+      - name: Install pyodbc and Microsoft ODBC Driver 18
+        if: matrix.driver == 'pyodbc'
+        run: |
+          if ! odbcinst -q -d 2>/dev/null | grep -q "ODBC Driver 18 for SQL Server"; then
+            curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | sudo gpg --batch --yes --dearmor -o /usr/share/keyrings/microsoft-prod.gpg
+            curl -fsSL "https://packages.microsoft.com/config/ubuntu/$(lsb_release -rs)/prod.list" | sudo tee /etc/apt/sources.list.d/mssql-release.list
+            sudo apt-get update
+            sudo ACCEPT_EULA=Y apt-get install -y msodbcsql18 unixodbc-dev
+          fi
+          odbcinst -q -d
+          pip install --require-hashes --no-deps -r ci/requirements-e2e.txt
+      - name: Install pymssql
+        if: matrix.driver == 'pymssql'
+        run: pip install --require-hashes --no-deps -r ci/requirements-e2e.txt
       - name: Start source and target SQL Server
         run: docker compose -f tests/e2e/docker-compose.yml up -d
       - name: Wait until both servers accept connections

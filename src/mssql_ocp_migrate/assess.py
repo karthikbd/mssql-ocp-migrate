@@ -268,7 +268,7 @@ class Assessor:
                          f"step {step} uses the {subsystem} subsystem, which SQL Server Agent on Linux can't run "
                          "(copy_agent_jobs skips such jobs)",
                          "run it as an OpenShift CronJob, or rewrite the step in T-SQL")
-        for name, msg, sev in self._q(self.src, """SELECT name, message_id, severity FROM msdb.dbo.sysalerts
+        for name, _msg, _sev in self._q(self.src, """SELECT name, message_id, severity FROM msdb.dbo.sysalerts
                                                    WHERE database_name = ? OR database_name IS NULL""", [db]):
             if self.target_is_linux:
                 self.add(WARNING, "Agent", f"alert {name}", "SQL Agent alerts aren't supported on Linux",

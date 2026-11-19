@@ -9,13 +9,15 @@ server.
 | Engine on SQLite | `test_engine.py` + `sqlite_adapter.py` | the full `migrate` pipeline with parallel workers (threads and processes): exact copies, chunk failure then resume, retry after transient failure, the `fail` and `truncate` policies, filters, 3-shard scale-out with `finalize`, and validation naming corrupted, missing and extra keys |
 | Wire level | `test_tls.py`, `test_pymssql.py` | the bundled driver's stdlib TLS completes the handshake inside TDS pre-login packets against a fake TDS server: trusted, CA-verified with host-name override, untrusted (rejected), mismatched (rejected), plain text. pymssql's FreeTDS logs in to the same fake server |
 | Simulated servers | `test_physical.py` | `lift` seed → catch-up (including log backups from an existing job, mapped paths) → cut-over in both `norecovery` and `read_only` modes, undoing replayed options, resumable seeding, and blockers for VDI and S3 limits |
-| Real SQL Server | `tests/e2e/` | catalog queries, `INSERT BULK`, identity probe, checksums, DDL, objects, `assess`, `sync` and the full `lift` flow, against SQL Server 2019, 2022 and 2025 containers |
+| Real SQL Server | `tests/e2e/` | catalog queries, `INSERT BULK`, identity probe, checksums, DDL, objects, `assess`, `sync` and the full `lift` flow, against SQL Server 2019, 2022 and 2025 containers, with each driver |
+| Fuzzing | `tests/fuzz/` (Atheris), `test_fuzz_targets.py` | any TOML/JSON config is either valid or a `ConfigError`; rows whose values differ never fingerprint or key the same; every row lands in exactly one chunk for any composite key and boundaries; quoted identifiers read back unchanged |
 
 ## Running
 
 CI runs the end-to-end suite on every push (`.github/workflows/e2e.yml`) against two SQL Server
-Linux containers with SQL Agent enabled, once for each version pair: 2022 → 2022, 2019 → 2022,
-2022 → 2025 and 2025 → 2025 (`SOURCE_IMAGE` / `TARGET_IMAGE` choose the images). To run it locally:
+Linux containers with SQL Agent enabled, for each version pair (2022 → 2022, 2019 → 2022,
+2022 → 2025 and 2025 → 2025; `SOURCE_IMAGE` / `TARGET_IMAGE` choose the images) and each driver:
+the bundled pytds, pyodbc with Microsoft ODBC Driver 18, and pymssql (`E2E_DRIVER`). To run it locally:
 
 ```console
 $ pytest -q                               # everything except e2e (those are skipped)
@@ -41,3 +43,15 @@ message, a login language, a server role with server permissions and an Agent op
 
 Environment variables for e2e: `E2E_SRC_HOST`, `E2E_SRC_PORT`, `E2E_TGT_HOST`, `E2E_TGT_PORT`,
 `E2E_USER`, `E2E_PASSWORD`, `E2E_ENCRYPT`, `E2E_DRIVER`, `E2E_WORKERS`.
+
+## Fuzzing
+
+ClusterFuzzLite runs the Atheris fuzz targets in `tests/fuzz` on every pull request (the code that
+changed), and daily in batch mode (`.github/workflows/cflite_*.yml`). To run one locally:
+
+```console
+$ pip install atheris
+$ python tests/fuzz/fuzz_rowhash.py -max_total_time=60
+```
+
+`tests/test_fuzz_targets.py` runs every target briefly on random input when Atheris is installed.

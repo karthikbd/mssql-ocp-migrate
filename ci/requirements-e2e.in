@@ -1,0 +1,3 @@
+# Optional drivers mssql-ocp-migrate uses if already installed, exercised by the e2e suite only.
+pyodbc>=5
+pymssql>=2.3

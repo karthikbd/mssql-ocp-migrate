@@ -10,7 +10,7 @@ import tempfile
 import time
 import uuid
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .model import Chunk
 
@@ -37,10 +37,11 @@ def _dec(v: Any) -> Any:
     if not isinstance(v, dict) or "$t" not in v:
         return v
     t, s = v["$t"], v["v"]
-    return {"dec": decimal.Decimal, "uuid": uuid.UUID,
+    conv: Dict[str, Callable[[Any], Any]] = {"dec": decimal.Decimal, "uuid": uuid.UUID,
             "bin": lambda x: base64.b64decode(x),
             "dt": _dt.datetime.fromisoformat, "date": _dt.date.fromisoformat,
-            "time": _dt.time.fromisoformat}[t](s)
+            "time": _dt.time.fromisoformat}
+    return conv[t](s)
 
 
 def encode_key(key: Optional[Tuple[Any, ...]]) -> Optional[List[Any]]:

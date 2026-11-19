@@ -6,11 +6,46 @@ import json
 import os
 from dataclasses import dataclass, field, fields, asdict
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, get_args, get_origin, get_type_hints, Union
 
 
 class ConfigError(ValueError):
     pass
+
+
+_LENIENT = {("migration", "compatibility_level"): (str, int)}   # 150 and "150" both mean level 150
+
+
+def _type_ok(value: Any, tp: Any) -> bool:
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Union:
+        return any(_type_ok(value, a) for a in args)
+    if tp is type(None):
+        return value is None
+    if origin in (list, List):
+        return isinstance(value, list) and all(_type_ok(v, args[0]) for v in value)
+    if origin in (dict, Dict):
+        return isinstance(value, dict) and all(_type_ok(k, args[0]) and _type_ok(v, args[1])
+                                               for k, v in value.items())
+    if tp is bool:
+        return isinstance(value, bool)
+    if tp is int:
+        return isinstance(value, int) and not isinstance(value, bool)
+    if tp is float:
+        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    return isinstance(value, tp)
+
+
+def _type_name(tp: Any) -> str:
+    origin, args = get_origin(tp), get_args(tp)
+    if origin is Union:
+        return " or ".join(_type_name(a) for a in args)
+    if origin in (list, List):
+        return f"a list of {_type_name(args[0])}"
+    if origin in (dict, Dict):
+        return f"a table of {_type_name(args[1])}"
+    return {type(None): "nothing", bool: "true/false", int: "a whole number", float: "a number",
+            str: "text"}.get(tp, getattr(tp, "__name__", str(tp)))
 
 
 @dataclass
@@ -156,6 +191,12 @@ class LiftConfig:
     assumed_compression_ratio: float = 3.0
 
 
+def _report_dir(value: Any) -> str:
+    if not isinstance(value, str) or not value:
+        raise ConfigError("report_dir must be a folder name")
+    return value
+
+
 @dataclass
 class Config:
     source: ConnectionConfig
@@ -169,11 +210,21 @@ class Config:
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "Config":
         def build(dc, raw, section):
-            raw = dict(raw or {})
+            if raw is None:
+                raw = {}
+            if not isinstance(raw, dict):
+                raise ConfigError(f"[{section}] must be a table of settings")
             names = {f.name for f in fields(dc)}
             unknown = set(raw) - names
             if unknown:
-                raise ConfigError(f"unknown key(s) in [{section}]: {', '.join(sorted(unknown))}")
+                raise ConfigError(f"unknown key(s) in [{section}]: {', '.join(sorted(map(str, unknown)))}")
+            hints = get_type_hints(dc)
+            for key, value in raw.items():
+                allowed = _LENIENT.get((section, key))
+                ok = isinstance(value, allowed) and not isinstance(value, bool) if allowed else _type_ok(value, hints[key])
+                if not ok:
+                    raise ConfigError(f"[{section}] {key} must be {_type_name(hints[key])}, "
+                                      f"not {type(value).__name__} {value!r:.40}")
             return dc(**raw)
 
         if "source" not in data or "target" not in data:
@@ -183,7 +234,7 @@ class Config:
             target=build(ConnectionConfig, data["target"], "target"),
             migration=build(MigrationConfig, data.get("migration"), "migration"),
             validation=build(ValidationConfig, data.get("validation"), "validation"),
-            report_dir=data.get("report_dir", "migration_report"),
+            report_dir=_report_dir(data.get("report_dir", "migration_report")),
             lift=build(LiftConfig, data.get("lift"), "lift"),
         )
         cfg.check()

@@ -58,8 +58,11 @@ class CatalogMixin:
     """Catalog reads. See the module docstring."""
 
     # these come from SqlServer
-    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]: ...  # pragma: no cover
-    def _has_col(self, view: str, col: str) -> bool: ...  # pragma: no cover
+    def query(self, sql: str, params: Optional[Sequence[Any]] = None) -> List[tuple]:  # pragma: no cover
+        raise NotImplementedError
+
+    def _has_col(self, view: str, col: str) -> bool:  # pragma: no cover
+        raise NotImplementedError
 
     def _col(self, view: str, col: str, expr: Optional[str] = None, default: str = "NULL") -> str:
         """``expr`` (default ``alias.col``) if the catalog view has the column, else ``default``."""
@@ -413,7 +416,7 @@ class CatalogMixin:
                 grids=() if auto else tuple(str(g) for g in (g1, g2, g3, g4)), cells_per_object=int(cpo or 16)))
         stop = self._col("sys.fulltext_indexes", "stoplist_id", "fi.stoplist_id", "0")
         sem = self._col("sys.fulltext_index_columns", "statistical_semantics", "fic.statistical_semantics", "0")
-        fts = {}
+        fts: Dict[Any, Any] = {}
         for oid, cat, key, track, stoplist_id, stoplist, col, lang, tcol, semantics in self.query(f"""
                 SELECT fi.object_id, fc.name, i.name, fi.change_tracking_state_desc, {stop},
                        (SELECT sl.name FROM sys.fulltext_stoplists sl WHERE sl.stoplist_id = {stop}),
@@ -534,7 +537,7 @@ class CatalogMixin:
         for t, memory in self.list_table_types():
             out.append(ModuleDef("TYPE", t.schema, t.name, ddl.table_type_sql(t, memory)))
         if self._has_col("sys.sequences", "current_value"):
-            for sch, name, tname, start, inc, mn, mx, cyc, cache, cur in self.query("""
+            for sch, name, tname, _start, inc, mn, mx, cyc, cache, cur in self.query("""
                     SELECT SCHEMA_NAME(s.schema_id), s.name, TYPE_NAME(s.user_type_id),
                            CAST(s.start_value AS decimal(38,0)), CAST(s.increment AS decimal(38,0)),
                            CAST(s.minimum_value AS decimal(38,0)), CAST(s.maximum_value AS decimal(38,0)),
@@ -647,13 +650,13 @@ class CatalogMixin:
         return out
 
     def _partitioning(self) -> List[ModuleDef]:
-        out = []
+        out: List[ModuleDef] = []
         funcs = self.query("""SELECT pf.function_id, pf.name, pf.boundary_value_on_right FROM sys.partition_functions pf
                               ORDER BY pf.function_id""")
         if not funcs:
             return out
         ptype: Dict[int, str] = {}
-        for fid, base, is_udt, ut_schema, max_len, prec, scale, coll in self.query("""
+        for fid, base, _is_udt, _ut_schema, max_len, prec, scale, coll in self.query("""
                 SELECT pp.function_id, st.name, ut.is_user_defined, SCHEMA_NAME(ut.schema_id), pp.max_length,
                        pp.precision, pp.scale, pp.collation_name
                 FROM sys.partition_parameters pp
@@ -850,7 +853,7 @@ class CatalogMixin:
             out.append(ModuleDef("CONTRACT", "", name, f"CREATE CONTRACT {q(name)} ({', '.join(usages)})"))
         poison = self._col("sys.service_queues", "is_poison_message_handling_enabled",
                            "q.is_poison_message_handling_enabled", "1")
-        for (sch, name, recv, enq, ret, act, proc, readers, exec_as, pois) in self.query(f"""
+        for (sch, name, recv, _enq, ret, act, proc, readers, exec_as, pois) in self.query(f"""
                 SELECT SCHEMA_NAME(q.schema_id), q.name, q.is_receive_enabled, q.is_enqueue_enabled,
                        q.is_retention_enabled, q.is_activation_enabled, q.activation_procedure, q.max_readers,
                        q.execute_as_principal_id, {poison}
@@ -893,17 +896,18 @@ class CatalogMixin:
         guid = self.query("SELECT CAST(service_broker_guid AS nvarchar(40)) FROM sys.databases "
                           "WHERE name = DB_NAME()")[0][0]
         notes: Dict[str, Tuple[str, str, List[str]]] = {}
-        for oid, name, svc, broker, ev in self.query("""
+        for _oid, en_name, en_svc, en_broker, ev in self.query("""
                 SELECT en.object_id, en.name, en.service_name, en.broker_instance, e.type_desc
                 FROM sys.event_notifications en JOIN sys.events e ON e.object_id = en.object_id
                 WHERE en.parent_class = 0"""):
-            n = notes.setdefault(name, (svc, broker, []))
+            n = notes.setdefault(en_name, (en_svc, en_broker, []))
             n[2].append(str(ev))
-        for name, (svc, broker, evs) in notes.items():
-            where = "N'current database'" if not broker or str(broker).lower() == str(guid).lower() else lit(broker)
-            out.append(ModuleDef("EVENT NOTIFICATION", "", name,
-                                 f"CREATE EVENT NOTIFICATION {q(name)} ON DATABASE FOR {', '.join(evs)} "
-                                 f"TO SERVICE {lit(svc)}, {where}"))
+        for en_name, (en_svc, en_broker, evs) in notes.items():
+            where = ("N'current database'" if not en_broker or str(en_broker).lower() == str(guid).lower()
+                     else lit(en_broker))
+            out.append(ModuleDef("EVENT NOTIFICATION", "", en_name,
+                                 f"CREATE EVENT NOTIFICATION {q(en_name)} ON DATABASE FOR {', '.join(evs)} "
+                                 f"TO SERVICE {lit(en_svc)}, {where}"))
         return out
 
     def _ddl_triggers(self) -> List[ModuleDef]:
@@ -1047,7 +1051,7 @@ class CatalogMixin:
             ORDER BY dp.principal_id""")
         names = {int(r[0]): r[1] for r in self.query("SELECT principal_id, name FROM sys.database_principals")}
         principals = []
-        for pid, name, ptype, dschema, login, authtype, owner, cert, akey in rows:
+        for _pid, name, ptype, dschema, login, authtype, owner, cert, akey in rows:
             ptype = str(ptype).strip()
             certificate = None
             if ptype == "R":
@@ -1423,7 +1427,7 @@ class CatalogMixin:
             WHERE EXISTS (SELECT 1 FROM msdb.dbo.sysjobsteps s WHERE s.job_id = j.job_id AND s.database_name = ?)
               AND c.name NOT LIKE N'REPL-%'      -- CDC and replication jobs: created by sp_cdc_enable_db etc.""",
             [database])
-        out = []
+        out: List[Any] = []
         for job_id, name, desc, cat, owner, start, notify, operator in jobs:
             warn = []
             stmts = [f"IF NOT EXISTS (SELECT 1 FROM msdb.dbo.syscategories WHERE name = {lit(cat)} AND category_class = 1) "

@@ -2,6 +2,7 @@ import datetime as dt
 import decimal
 import json
 import random
+import re
 import sqlite3
 import uuid
 
@@ -171,3 +172,36 @@ def test_cli_init_and_bad_config(capsys, tmp_path):
     assert main(["init-config"]) == 0
     assert "[source]" in capsys.readouterr().out
     assert main(["check", "-c", str(tmp_path / "missing.toml")]) == 2
+
+
+# ------------------------------------------------------- found by fuzzing
+def test_row_fingerprint_fields_cannot_run_together():
+    h = RowHasher([Column("a", "nvarchar"), Column("b", "nvarchar")], ["a", "b"])
+    r1, r2 = ("x\x1esy", "z"), ("x", "y\x1esz")
+    assert h.encode(r1) != h.encode(r2)
+    assert h.digest(r1) != h.digest(r2)
+    assert h.key(r1) != h.key(r2)
+    hb = RowHasher([Column("a", "varbinary"), Column("b", "varbinary")], ["a"])
+    assert hb.encode((b"\x1ex", b"")) != hb.encode((b"", b"\x1ex"))
+
+
+@pytest.mark.parametrize("doc, message", [
+    ({"source": 5, "target": {"database": "d"}}, "[source] must be a table"),
+    ({"source": {"database": "d", "port": "1433"}, "target": {"database": "d"}}, "[source] port must be a whole number"),
+    ({"source": {"database": "d"}, "target": {"database": "d"}, "migration": {"workers": True}}, "workers must be"),
+    ({"source": {"database": "d"}, "target": {"database": "d"}, "migration": {"include": "dbo.*"}}, "include must be a list"),
+    ({"source": {"database": "d"}, "target": {"database": "d"}, "lift": {"rename": {"a": 1}}}, "rename must be"),
+    ({"source": {"database": "d"}, "target": {"database": "d"}, "report_dir": 7}, "report_dir"),
+])
+def test_config_wrong_types_are_config_errors(doc, message):
+    with pytest.raises(ConfigError, match=re.escape(message)):
+        Config.from_dict(doc)
+
+
+def test_config_compatibility_level_accepts_number_or_text():
+    base = {"source": {"database": "d"}, "target": {"database": "d"}}
+    for level in (150, "150"):
+        cfg = Config.from_dict({**base, "migration": {"compatibility_level": level}})
+        assert cfg.migration.compatibility_level == "150"
+    cfg = Config.from_dict({**base, "validation": {"sample_full_pct": 10}})   # an int where a float is expected
+    assert cfg.validation.sample_full_pct == 10

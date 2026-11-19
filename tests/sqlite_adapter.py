@@ -34,7 +34,7 @@ class SqliteDB(Database):
                 "SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%' ORDER BY name"):
             t = Table(schema="main", name=name)
             pk = []
-            for cid, cname, ctype, notnull, dflt, pkpos in self.conn.execute(f"PRAGMA table_info({self.quote(name)})"):
+            for _cid, cname, ctype, notnull, _dflt, pkpos in self.conn.execute(f"PRAGMA table_info({self.quote(name)})"):
                 t.columns.append(Column(name=cname, type_name=_TYPES.get(ctype.upper(), "nvarchar"),
                                         max_length=-1 if ctype.upper() in ("TEXT", "BLOB") else 0,
                                         nullable=not notnull and not pkpos))

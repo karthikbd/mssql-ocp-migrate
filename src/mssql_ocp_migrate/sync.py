@@ -29,7 +29,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .config import Config
 from .ddl import q, type_sql
-from .model import Table
+from .model import Index, Table
 
 log = logging.getLogger(__name__)
 
@@ -71,7 +71,7 @@ def load_version(cfg: Config) -> Optional[int]:
 
 def save_version(cfg: Config, version: int, res: SyncResult) -> None:
     p = sync_state_path(cfg)
-    data = {"version": version, "updated": time.time(), "passes": []}
+    data: Dict[str, Any] = {"version": version, "updated": time.time(), "passes": []}
     if os.path.exists(p):
         with open(p, encoding="utf-8") as f:
             data["passes"] = json.load(f).get("passes", [])[-49:]
@@ -95,9 +95,16 @@ def sync_skip_reason(t: Table) -> Optional[str]:
     return None
 
 
+def _pk(t: Table) -> Index:
+    """The primary key; sync only handles tables that have one (checked when tables are chosen)."""
+    if t.primary_key is None:
+        raise SyncError(f"{t.fqn} has no primary key")
+    return t.primary_key
+
+
 def changes_sql(src, t: Table) -> str:
     """Every key changed since a version, with the source's current row if it still exists."""
-    keys = [c for c, _ in t.primary_key.columns]
+    keys = [c for c, _ in _pk(t).columns]
     cols = t.insert_columns
     exprs = src.select_exprs(t, cols)
     inner = ", ".join([f"{q(k)} AS {q('__k' + str(i))}" for i, k in enumerate(keys)]
@@ -124,7 +131,8 @@ class Syncer:
             raise SyncError("no change-tracking version recorded: enable change tracking on the source database and "
                             "tables (or set migration.sync_enable_change_tracking = true) before running migrate")
         tables = Migrator(self.cfg, self.factory, self.progress).source_tables()
-        src, tgt = self.factory("source", True), self.factory("target", False)
+        src: Any = self.factory("source", True)     # SQL Server: change tracking
+        tgt: Any = self.factory("target", False)
         res = SyncResult(from_version=start, final=final)
         try:
             to = int(src.query("SELECT CHANGE_TRACKING_CURRENT_VERSION()")[0][0] or 0)
@@ -167,7 +175,7 @@ class Syncer:
 
     # -------------------------------------------------------------- one table
     def _apply(self, src, tgt, t: Table, since: int) -> Dict[str, int]:
-        nkeys = len(t.primary_key.columns)
+        nkeys = len(_pk(t).columns)
         rows = src.query(changes_sql(src, t), [since])
         if not rows:
             return {"deleted": 0, "upserted": 0}
@@ -186,7 +194,7 @@ class Syncer:
 
     @staticmethod
     def _delete_keys(tgt, t: Table, keys: List[Tuple[Any, ...]], batch: int = 300) -> None:
-        cols = [t.column(c) for c, _ in t.primary_key.columns]
+        cols = [t.column(c) for c, _ in _pk(t).columns]
         cond = "(" + " AND ".join(f"{q(c.name)} = CAST(? AS {type_sql(c)})" for c in cols) + ")"
         per = max(1, min(batch, 2000 // max(1, len(cols))))
         for i in range(0, len(keys), per):

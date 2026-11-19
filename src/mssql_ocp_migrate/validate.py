@@ -224,21 +224,21 @@ def extras_diff(cfg: Config, src: DatabaseExtras, tgt: DatabaseExtras) -> List[s
         for s, n, own in src.object_owners:
             if towners.get((s, n)) != own and own in present:
                 out.append(f"object {s}.{n}: owner {own} -> {towners.get((s, n), 'schema owner')}")
-        tk = {p.key for p in tgt.permissions}
-        for p in src.permissions:
-            if p.key not in tk and p.grantee in present | {"public"}:
-                what = p.securable_class.lower() + (f" {p.schema}" if p.schema else "") + (
-                    f".{p.securable}" if p.securable else "") + (f"({p.column})" if p.column else "")
-                out.append(f"{p.state} {p.permission} on {what} to {p.grantee} missing on target")
+        tk = {perm.key for perm in tgt.permissions}
+        for perm in src.permissions:
+            if perm.key not in tk and perm.grantee in present | {"public"}:
+                what = perm.securable_class.lower() + (f" {perm.schema}" if perm.schema else "") + (
+                    f".{perm.securable}" if perm.securable else "") + (f"({perm.column})" if perm.column else "")
+                out.append(f"{perm.state} {perm.permission} on {what} to {perm.grantee} missing on target")
     if m.copy_row_level_security:
-        tpol = {(p.schema, p.name): p for p in tgt.security_policies}
-        for p in src.security_policies:
-            other = tpol.get((p.schema, p.name))
+        tpol = {(pol.schema, pol.name): pol for pol in tgt.security_policies}
+        for pol in src.security_policies:
+            other = tpol.get((pol.schema, pol.name))
             if other is None:
-                out.append(f"security policy {p.schema}.{p.name} missing on target")
+                out.append(f"security policy {pol.schema}.{pol.name} missing on target")
                 continue
-            missing = set(p.predicates) - set(other.predicates)
-            out.extend(f"security policy {p.schema}.{p.name}: {x[0].lower()} predicate on {x[2]}.{x[3]} missing"
+            missing = set(pol.predicates) - set(other.predicates)
+            out.extend(f"security policy {pol.schema}.{pol.name}: {x[0].lower()} predicate on {x[2]}.{x[3]} missing"
                        for x in sorted(missing))
     if m.copy_certificates:
         tc = {c.name for c in tgt.certificates}
@@ -332,8 +332,9 @@ class Validator:
 
     def _server_diffs(self, src: Database, tgt: Database) -> List[str]:
         """SQL Agent jobs and linked servers, when the migration copies them."""
-        m, out = self.cfg.migration, []
-        query = getattr(tgt, "query", None)
+        m = self.cfg.migration
+        out: List[str] = []
+        query: Any = getattr(tgt, "query", None)
         if query is None:
             return out
         try:

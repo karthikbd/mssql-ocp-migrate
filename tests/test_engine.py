@@ -185,7 +185,6 @@ def test_sharded_scale_out_then_finalize(tmp_path):
         assert run.validation is None                  # validation waits for finalize
         shard_rows.append(run.rows)
     assert all(r > 0 for r in shard_rows)
-    from mssql_ocp_migrate.engine import MigrationError
     c = cfg(tmp_path, shard_count=3, plan_file=str(tmp_path / "plan.json"))
     run = Migrator(c, SqliteFactory(src, tgt)).finalize()
     assert run.ok and run.validation.ok

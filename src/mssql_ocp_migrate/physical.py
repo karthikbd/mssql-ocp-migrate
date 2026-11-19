@@ -21,7 +21,6 @@ import dataclasses
 import decimal
 import json
 import logging
-import math
 import os
 import secrets
 import threading
@@ -508,7 +507,6 @@ class Lift:
 
     def seed(self, db: str, restart: bool = False) -> None:
         st = self.state.db(db)
-        tdb = self.target_name(db)
         if st["phase"] in ("restoring", "recovered") and not restart:
             self.progress(f"{db}: already seeded (phase {st['phase']}); continuing with logs")
             return

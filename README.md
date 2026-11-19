@@ -3,8 +3,10 @@
 [![PyPI version](https://badge.fury.io/py/mssql-ocp-migrate.svg)](https://pypi.org/project/mssql-ocp-migrate/)
 [![Python versions](https://img.shields.io/pypi/pyversions/mssql-ocp-migrate.svg)](https://pypi.org/project/mssql-ocp-migrate/)
 [![Tests](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/tests.yml/badge.svg)](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/tests.yml)
+[![End-to-end](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/e2e.yml/badge.svg)](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/e2e.yml)
 [![Docs](https://readthedocs.org/projects/mssql-ocp-migrate/badge/?version=latest)](https://mssql-ocp-migrate.readthedocs.io)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+[![ClusterFuzzLite](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/cflite_batch.yml/badge.svg)](https://github.com/karthikbd/mssql-ocp-migrate/actions/workflows/cflite_batch.yml)
 [![OpenSSF Scorecard](https://api.securityscorecards.dev/projects/github.com/karthikbd/mssql-ocp-migrate/badge)](https://securityscorecards.dev/viewer/?uri=github.com/karthikbd/mssql-ocp-migrate)
 
 Move a SQL Server database to SQL Server running on **OpenShift (OCP)**, or to any other SQL Server,

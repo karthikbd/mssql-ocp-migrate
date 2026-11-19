@@ -112,7 +112,7 @@ class FakeTds(threading.Thread):
                 except ssl.SSLWantReadError:
                     chunk = conn.recv(65536)
                     if not chunk:
-                        raise EOFError
+                        raise EOFError from None
                     inc.write(chunk)
             r, buf = buf[:n], buf[n:]
             return r

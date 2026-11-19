@@ -66,7 +66,7 @@ written. Windows logins aren't copied.
 | Signed releases | Sigstore signatures for the wheel, sdist and SBOM attached to each GitHub release |
 | Least privilege | workflows default to `read-all`; only the publish and signing jobs get `id-token: write` / `contents: write` |
 
-At release 0.4.0, `pip-audit` reports **no known vulnerabilities** for python-tds 1.17.1 or for any
+At release 0.5.0, `pip-audit` reports **no known vulnerabilities** for python-tds 1.17.1 or for any
 CI tool, and OSV has no advisories for python-tds, pymssql 2.4.6 or pyodbc 5.2.0.
 
 Other notes:

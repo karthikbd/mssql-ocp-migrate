@@ -9,8 +9,12 @@ from typing import Any, Callable, List, Sequence
 
 from .model import Column
 
-_SEP = b"\x1e"
 _NULL = b"\x00N"
+
+
+def _join(parts) -> bytes:
+    """Length-prefix every field so no two different rows encode the same (a value may contain any byte)."""
+    return b"".join(len(p).to_bytes(4, "big") + p for p in parts)
 
 
 def _norm_default(v: Any) -> bytes:
@@ -63,13 +67,13 @@ class RowHasher:
         self.key_pos: List[int] = [names.index(k) for k in key_columns]
 
     def encode(self, row: Sequence[Any]) -> bytes:
-        return _SEP.join(f(v) for f, v in zip(self.norms, row))
+        return _join(f(v) for f, v in zip(self.norms, row))
 
     def digest(self, row: Sequence[Any]) -> bytes:
         return hashlib.sha256(self.encode(row)).digest()
 
     def key(self, row: Sequence[Any]) -> bytes:
-        return _SEP.join(self.norms[i](row[i]) for i in self.key_pos)
+        return _join(self.norms[i](row[i]) for i in self.key_pos)
 
     def display_key(self, row: Sequence[Any]) -> str:
         return ", ".join(repr(row[i]) for i in self.key_pos)

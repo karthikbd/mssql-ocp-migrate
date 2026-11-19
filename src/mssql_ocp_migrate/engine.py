@@ -9,7 +9,10 @@ import traceback
 import zlib
 from pathlib import Path
 from dataclasses import dataclass, field
-from typing import Any, Callable, Dict, List, Optional
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
+
+if TYPE_CHECKING:
+    from .sqlserver import SqlServer
 
 from . import ddl
 from .adapter import Database, ModuleDef
@@ -22,6 +25,12 @@ log = logging.getLogger(__name__)
 
 Factory = Callable[[str, bool], Database]   # (side, autocommit) -> Database
 
+
+
+def _server_info(db: Any) -> Dict[str, Any]:
+    """Version, edition and collation, for adapters that can report them (SQL Server)."""
+    info = getattr(db, "server_info", None)
+    return dict(info()) if info else {}
 
 class MigrationError(RuntimeError):
     pass
@@ -45,7 +54,7 @@ class SqlServerFactory:
     def __init__(self, cfg: Config):
         self.cfg = cfg
 
-    def __call__(self, side: str, autocommit: bool = True) -> Database:
+    def __call__(self, side: str, autocommit: bool = True) -> "SqlServer":
         from .sqlserver import SqlServer
         return SqlServer(getattr(self.cfg, side), side, autocommit=autocommit)
 
@@ -232,7 +241,7 @@ class Migrator:
             extras = src.database_extras()
             if extras is not None and mc.copy_security:
                 schemas |= set(src.list_schemas())
-            bindings = getattr(src, "rule_default_bindings", lambda: [])()
+            bindings: List[Any] = getattr(src, "rule_default_bindings", lambda: [])()
         finally:
             src.close()
         extras = scoped_extras(extras, tables, modules) if extras is not None else None
@@ -288,8 +297,9 @@ class Migrator:
         out = ddl.post_load_sql(t, self._build_options(), m.memory_optimized == "keep")
         if m.copy_statistics:
             out += [ddl.statistics_sql(t, st, m.statistics_fullscan) for st in t.statistics]
-        if m.copy_full_text and t.fulltext:
-            out.append(ddl.fulltext_index_sql(t))
+        ft = ddl.fulltext_index_sql(t) if m.copy_full_text and t.fulltext else None
+        if ft:
+            out.append(ft)
         return out
 
     def _extras_sql(self, ex: DatabaseExtras) -> List[str]:
@@ -333,7 +343,7 @@ class Migrator:
         Scale-out: shard 0 creates the schema and writes the chunk plan to ``plan_file`` (on a
         shared volume); every shard copies the chunks whose id hashes to it; `finalize` then builds
         indexes/constraints/objects and validates once all shards are done."""
-        cfg, m = self.cfg, self.cfg.migration
+        m = self.cfg.migration
         res = RunResult(started=time.time())
         sharded = m.shard_count > 1
         lead = m.shard_index == 0
@@ -346,8 +356,8 @@ class Migrator:
         src = self.factory("source", True)
         tgt = self.factory("target", True)
         try:
-            res.source_info = getattr(src, "server_info", lambda: {})()
-            res.target_info = getattr(tgt, "server_info", lambda: {})()
+            res.source_info = _server_info(src)
+            res.target_info = _server_info(tgt)
             if lead and m.assess and not state.phase_done("schema"):
                 self._assess(src, tgt, res)
             sc, tc = res.source_info.get("collation"), res.target_info.get("collation")
@@ -444,12 +454,12 @@ class Migrator:
                         self._database_settings(src, tgt, res)
                     self._after_settings(src, tgt, tables, modules, extras, res)
                     state.mark_phase("post_load")
-            if m.target_recovery_simple and state.data["phases"].get("recovery_before"):
-                if not any(r.failed_chunks for r in res.tables.values()):
-                    model = state.data["phases"]["recovery_before"]
-                    tgt.execute(f"ALTER DATABASE CURRENT SET RECOVERY {model}")
-                    res.warnings.append(f"target recovery model restored to {model}: take a FULL backup now "
-                                        "to start the log chain")
+            if (m.target_recovery_simple and state.data["phases"].get("recovery_before")
+                    and not any(r.failed_chunks for r in res.tables.values())):
+                model = state.data["phases"]["recovery_before"]
+                tgt.execute(f"ALTER DATABASE CURRENT SET RECOVERY {model}")
+                res.warnings.append(f"target recovery model restored to {model}: take a FULL backup now "
+                                    "to start the log chain")
             res.identity_strategy = _identity_info()
         finally:
             src.close()
@@ -465,7 +475,7 @@ class Migrator:
 
     def _recovery_to_simple(self, tgt: Database, state: State) -> None:
         """Bulk loads are minimally logged in SIMPLE/BULK_LOGGED: far less log I/O on the target."""
-        query = getattr(tgt, "query", None)
+        query: Any = getattr(tgt, "query", None)
         if query is None:
             return
         model = query("SELECT recovery_model_desc FROM sys.databases WHERE name = DB_NAME()")[0][0]
@@ -573,7 +583,7 @@ class Migrator:
         try:
             if master.query("SELECT DB_ID(?)", [name])[0][0] is not None:
                 return
-            src = self.factory("source", True)
+            src: Any = self.factory("source", True)     # SQL Server: this path only runs against it
             try:
                 coll, contain = src.query("SELECT collation_name, containment_desc FROM sys.databases "
                                           "WHERE name = DB_NAME()")[0]
@@ -586,7 +596,7 @@ class Migrator:
         finally:
             master.close()
 
-    def _preflight_source(self, src: Database, tables: List[Table], res: RunResult) -> None:
+    def _preflight_source(self, src: Any, tables: List[Table], res: RunResult) -> None:
         """Refuse to copy data the migration login can't fully see, and point out server-level
         objects that stay behind."""
         m = self.cfg.migration
@@ -595,7 +605,7 @@ class Migrator:
             raise MigrationError(
                 f"{len(masked)} masked columns (e.g. {', '.join(masked[:3])}) would be copied as masked values: "
                 "grant UNMASK to the migration login on the source (or use a db_owner login)")
-        hidden = getattr(src, "rls_hidden_rows", lambda t: [])(tables)
+        hidden: List[Any] = getattr(src, "rls_hidden_rows", lambda t: [])(tables)
         if hidden:
             raise MigrationError(
                 "row-level security hides rows from the migration login: "
@@ -665,7 +675,7 @@ class Migrator:
                     for sql in ddl.post_load_sql(t, self._build_options(), m.memory_optimized == "keep"):
                         self._ddl(tgt, sql, f"index/constraint on {t.fqn}", res, ignore_exists=True)
 
-    def _memory_optimized_filegroup(self, tgt: Database, res: RunResult) -> None:
+    def _memory_optimized_filegroup(self, tgt: Any, res: RunResult) -> None:
         """Memory-optimized tables need a MEMORY_OPTIMIZED_DATA filegroup, and the chunk
         transactions need snapshot isolation on them (MEMORY_OPTIMIZED_ELEVATE_TO_SNAPSHOT)."""
         if hasattr(tgt, "memory_optimized_filegroup") and not tgt.memory_optimized_filegroup():
@@ -680,7 +690,7 @@ class Migrator:
                   "snapshot for memory-optimized tables", res)
 
     def _fulltext_installed(self, tgt: Database, res: RunResult) -> bool:
-        query = getattr(tgt, "query", None)
+        query: Any = getattr(tgt, "query", None)
         if query is None or query("SELECT CAST(SERVERPROPERTY('IsFullTextInstalled') AS int)")[0][0]:
             return True
         res.ddl_errors.append({"object": "full-text search",
@@ -728,10 +738,10 @@ class Migrator:
                     self._ddl(tgt, sql, f"system versioning on {t.fqn}", res)
         return extras
 
-    def _copy_logins(self, src: Database, tgt: Database, ex: DatabaseExtras, res: RunResult) -> None:
+    def _copy_logins(self, src: Any, tgt: Any, ex: DatabaseExtras, res: RunResult) -> None:
         if not hasattr(src, "server_logins"):
             return
-        query = getattr(tgt, "query")
+        query = tgt.query
         missing = [p for p in ex.principals if p.login and not query("SELECT SUSER_ID(?)", [p.login])[0][0]]
         if not missing:
             return
@@ -744,7 +754,7 @@ class Migrator:
 
     def _apply_extras(self, tgt: Database, ex: DatabaseExtras, res: RunResult) -> None:
         m = self.cfg.migration
-        query = getattr(tgt, "query", None)
+        query: Any = getattr(tgt, "query", None)
         if m.copy_certificates and ex.certificates:
             if any(c.private_key for c in ex.certificates) and query is not None and not query(
                     "SELECT COUNT(*) FROM sys.symmetric_keys WHERE name = '##MS_DatabaseMasterKey##'")[0][0]:
@@ -758,7 +768,7 @@ class Migrator:
                                            f"target: set the environment variable {m.master_key_password_env}"})
             for c in ex.certificates:
                 self._ddl(tgt, ddl.certificate_sql(c), f"certificate {c.name}", res, ignore_exists=True)
-        skipped = set()
+        skipped: Set[str] = set()
         if m.copy_security:
             self.progress(f"creating {len(ex.principals)} users/roles, {len(ex.role_members)} role memberships "
                           f"and {len(ex.permissions)} permissions")
@@ -776,9 +786,9 @@ class Migrator:
                     why = (f"login {p.login} doesn't exist on the target (or isn't visible without VIEW ANY "
                            "DEFINITION): create it first (copy_logins does this with the same SID and password), "
                            "or set copy_security = false")
-                if why:
+                if why or sql is None:
                     skipped.add(p.name)
-                    res.ddl_errors.append({"object": f"user {p.name}", "error": why})
+                    res.ddl_errors.append({"object": f"user {p.name}", "error": why or "can't be recreated"})
                     continue
                 self._ddl(tgt, sql, f"principal {p.name}", res, ignore_exists=True)
             for p in ex.principals:
@@ -818,7 +828,7 @@ class Migrator:
                 if sql:
                     self._ddl(tgt, sql, f"security policy {pol.schema}.{pol.name}", res, ignore_exists=True)
 
-    def _database_settings(self, src: Database, tgt: Database, res: RunResult) -> None:
+    def _database_settings(self, src: Any, tgt: Any, res: RunResult) -> None:
         se, te = src.database_extras(), tgt.database_extras()
         if se is None or te is None:
             return
@@ -838,7 +848,7 @@ class Migrator:
                     res.ddl_errors.append({"object": "database settings", "error": str(exc), "sql": sql})
         owner = se.settings.owner
         if owner and owner != te.settings.owner and owner != "sa":
-            query = getattr(tgt, "query")
+            query = tgt.query
             if not query("SELECT SUSER_ID(?)", [owner])[0][0]:
                 res.warnings.append(f"database owner {owner} doesn't exist on the target; the owner stays "
                                     f"{te.settings.owner}")
@@ -861,7 +871,7 @@ class Migrator:
             self.progress(f"creating {len(late)} Service Broker objects, DDL triggers and plan guides")
             self._create_modules(tgt, late, res)
         if extras is not None and m.copy_security:
-            skipped = getattr(self, "_skipped_principals", set())
+            skipped: Set[str] = getattr(self, "_skipped_principals", set())
             for perm in extras.permissions:
                 if perm.securable_class in LATE_PERMISSION_CLASSES and perm.grantee not in skipped:
                     self._ddl(tgt, ddl.permission_sql(perm), f"permission {perm.permission} to {perm.grantee}", res)
@@ -871,9 +881,9 @@ class Migrator:
                       "allow encrypted value modifications off", res)
         self._server_objects(src, tgt, res)
 
-    def _server_objects(self, src: Database, tgt: Database, res: RunResult) -> None:
+    def _server_objects(self, src: Any, tgt: Any, res: RunResult) -> None:
         m = self.cfg.migration
-        query = getattr(tgt, "query", None)
+        query: Any = getattr(tgt, "query", None)
         linux = bool(getattr(tgt, "is_linux", lambda: False)())
         if m.copy_custom_messages and hasattr(src, "custom_messages"):
             self._copy_messages(src, tgt, res)
@@ -917,7 +927,7 @@ class Migrator:
                 for sql in stmts:
                     self._ddl(tgt, sql, f"linked server {name}", res)
 
-    def _copy_messages(self, src: Database, tgt: Database, res: RunResult) -> None:
+    def _copy_messages(self, src: Any, tgt: Any, res: RunResult) -> None:
         """User-defined messages the code raises (RAISERROR(50001, ...)), unless the target already
         has that number: messages are server-wide and may belong to another application there."""
         try:
@@ -937,7 +947,7 @@ class Migrator:
             for _lang, sql in stmts:
                 self._ddl(tgt, sql, f"message {mid}", res)
 
-    def _copy_configuration(self, src: Database, tgt: Database, res: RunResult) -> None:
+    def _copy_configuration(self, src: Any, tgt: Any, res: RunResult) -> None:
         """sp_configure values from the curated list that is safe to align (copy_server_configuration)."""
         from .assess import APPLICABLE_CONFIGURATION
         s, t = src.configuration(), tgt.configuration()
@@ -1049,7 +1059,8 @@ class Migrator:
         if kind == "process":
             # spawn, not fork: forking a process that already runs threads can deadlock the child
             import multiprocessing
-            pool = cf.ProcessPoolExecutor(max_workers=m.workers, mp_context=multiprocessing.get_context("spawn"))
+            pool: cf.Executor = cf.ProcessPoolExecutor(max_workers=m.workers,
+                                                       mp_context=multiprocessing.get_context("spawn"))
         else:
             pool = cf.ThreadPoolExecutor(max_workers=m.workers)
         t0, done_rows, done = time.perf_counter(), 0, 0

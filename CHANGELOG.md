@@ -2,6 +2,27 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
+## [0.5.0] - 2026-11-18
+
+Same quality and supply-chain checks as lodestream.
+
+### Fixed
+- **Full validation could miss a difference.** Row fingerprints joined column values with a
+  separator byte that the values themselves may contain, so two different rows could fingerprint the
+  same (e.g. text `"x\x1esy", "z"` and `"x", "y\x1esz"`), and two different keys could collide. Each value
+  is now length-prefixed. Found by fuzzing.
+- A configuration value of the wrong type (`port = "1433"`, `include = "dbo.*"`, `source = 5`, ...)
+  failed later with a Python error, or not at all; it is now rejected at start-up with a message that
+  names the setting and the expected type. `compatibility_level` takes a number or text. Found by fuzzing.
+
+### Added
+- ClusterFuzzLite (Atheris) fuzzing of config loading, row fingerprints, chunk predicates and
+  identifier quoting, on every pull request, push and daily
+- End-to-end CI runs every version pair with all three drivers: bundled pytds, pyodbc + ODBC
+  Driver 18, and pymssql
+- `ruff` and `mypy` in CI (both clean); `CONTRIBUTING.md`; private vulnerability reporting;
+  OpenSSF Best Practices badge
+
 ## [0.4.0] - 2026-11-18
 
 Gaps found by comparing with dbatools, Microsoft's migration tooling (DMA, Azure DMS, SqlPackage)

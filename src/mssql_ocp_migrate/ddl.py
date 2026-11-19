@@ -13,7 +13,7 @@ Order used by the engine (fast loads, then constraints that check the loaded dat
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List, Optional
+from typing import Dict, List, Optional
 
 from .model import (CdcTable, Certificate, CheckConstraint, Column, DatabaseSettings, ExtendedProperty,
                     ForeignKey, Index, Permission, Principal, SecurityPolicy, Signature, Statistic, Table)
@@ -122,7 +122,7 @@ def storage_options(ix: Index) -> List[str]:
 def compression_options(compression: str, per_partition) -> List[str]:
     """DATA_COMPRESSION, per partition when the partitions differ."""
     if per_partition:
-        groups = {}
+        groups: Dict[str, List[str]] = {}
         for pno, comp in sorted(per_partition.items()):
             groups.setdefault(comp, []).append(str(pno))
         return [f"DATA_COMPRESSION = {comp} ON PARTITIONS ({', '.join(nums)})"

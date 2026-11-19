@@ -13,7 +13,7 @@ from .config import Config
 
 
 def _plain(o: Any) -> Any:
-    if is_dataclass(o):
+    if is_dataclass(o) and not isinstance(o, type):
         d = asdict(o)
         for prop in ("ok", "rows"):
             if hasattr(type(o), prop) and isinstance(getattr(type(o), prop), property):

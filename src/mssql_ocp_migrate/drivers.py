@@ -15,7 +15,7 @@ from __future__ import annotations
 import datetime as _dt
 import logging
 import struct
-from typing import Any, Iterator, List, Optional, Sequence
+from typing import Any, Dict, Iterator, List, Optional, Sequence
 
 from .config import ConnectionConfig
 
@@ -163,7 +163,7 @@ def _connect_pytds(cfg: ConnectionConfig, autocommit: bool) -> Any:
     from ._vendor.pytds import tls
 
     password = cfg.resolve_password()
-    kwargs = dict(
+    kwargs: Dict[str, Any] = dict(
         dsn=cfg.host, port=None if cfg.instance else cfg.port, database=cfg.database,
         user=cfg.user, password=password, login_timeout=cfg.login_timeout,
         timeout=cfg.query_timeout, appname=cfg.app_name, autocommit=autocommit,
@@ -176,10 +176,7 @@ def _connect_pytds(cfg: ConnectionConfig, autocommit: bool) -> Any:
     if cfg.encrypt == "off":
         return pytds.connect(**kwargs)
 
-    if cfg.trust_server_certificate:
-        cafile = tls.INSECURE
-    else:
-        cafile = cfg.ca_file or tls.SYSTEM_CA
+    cafile = tls.INSECURE if cfg.trust_server_certificate else cfg.ca_file or tls.SYSTEM_CA
     try:
         return pytds.connect(cafile=cafile, validate_host=False, **kwargs)
     except Exception as exc:
