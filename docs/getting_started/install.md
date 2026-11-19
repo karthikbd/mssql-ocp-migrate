@@ -152,3 +152,25 @@ $ python -c "import mssql_ocp_migrate as m; print(m.__version__)"
 ```
 
 Then run `mssql-migrate check -c migrate.toml` once you've filled in the connection details.
+
+## Verifying a download
+
+Every GitHub release carries Sigstore signatures (`.sigstore.json`) for the wheel, the sdist and the
+CycloneDX SBOM. To check that a file was built by this repository's release workflow for that tag:
+
+```console
+$ pip download --no-deps mssql-ocp-migrate=={{ version }} -d dl
+$ gh release download v{{ version }} -R karthikbd/mssql-ocp-migrate -p "mssql_ocp_migrate-{{ version }}-py3-none-any.whl.sigstore.json" -D dl
+$ python -m pip install sigstore
+$ python -m sigstore verify github dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl \
+    --bundle dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl.sigstore.json \
+    --cert-identity https://github.com/karthikbd/mssql-ocp-migrate/.github/workflows/python-publish.yml@refs/tags/v{{ version }} \
+    --repository karthikbd/mssql-ocp-migrate --ref refs/tags/v{{ version }} --trigger release
+OK: dl/mssql_ocp_migrate-{{ version }}-py3-none-any.whl
+```
+
+The identity check proves who produced the file: the `python-publish.yml` workflow of
+`karthikbd/mssql-ocp-migrate`, run for that release tag. Behind a proxy that blocks Sigstore's update
+server, add `--offline`. Releases are also reproducible: rebuilding the tag gives byte-identical files
+(see the release page of the developer documentation). The same signature check runs on GitHub after
+every release (`verify-release.yml`), which also confirms PyPI serves the same files.
