@@ -240,7 +240,7 @@ def _connect_pymssql(cfg: ConnectionConfig, autocommit: bool) -> Any:
                     "(freetds.conf 'ca file'); ca_file/hostname_in_certificate are not applied")
         _warned_pymssql_tls = True
     server = f"{cfg.host}\\{cfg.instance}" if cfg.instance else cfg.host
-    kwargs = dict(server=server, user=cfg.user, password=cfg.resolve_password(), database=cfg.database,
+    kwargs: Dict[str, Any] = dict(server=server, user=cfg.user, password=cfg.resolve_password(), database=cfg.database,
                   login_timeout=cfg.login_timeout, timeout=cfg.query_timeout or 0, appname=cfg.app_name,
                   autocommit=autocommit, tds_version="7.4", use_datetime2=True,
                   encryption={"off": "off", "optional": "request", "required": "require"}[cfg.encrypt])
