@@ -93,6 +93,8 @@ def migrated(tmp_path_factory):
     run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
     print("run warnings:", *run.warnings, sep="\n  ", flush=True)
     print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
+    print("failed chunks:", *[f"{n}: {c} {r.errors[:3]}" for n, r in run.tables.items() for c in r.failed_chunks],
+          sep="\n  ", flush=True)
     from mssql_ocp_migrate import report
     print("report:", report.write(cfg, run=run))
     src = connect(conn_cfg("source", "e2e_src"))

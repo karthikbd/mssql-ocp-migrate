@@ -72,7 +72,8 @@ class Connection:
 
     def _params(self, params: Sequence[Any]) -> tuple:
         if self.driver == "pymssql":
-            return tuple(pymssql_value(v) for v in params)
+            # pymssql quotes bytes as a *text* literal ('...'); only bytearray becomes 0x... binary
+            return tuple(bytearray(v) if isinstance(v, (bytes, memoryview)) else pymssql_value(v) for v in params)
         if self.driver == "pytds":
             # the bundled driver sends plain bytes as *text* (bytes_to_unicode); Binary keeps them binary
             from ._vendor.pytds.tds_types import Binary

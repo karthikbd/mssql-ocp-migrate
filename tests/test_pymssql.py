@@ -87,3 +87,12 @@ def test_pymssql_login_reaches_server():
     srv.join(10)
     assert srv.logins and srv.logins[0][0] == LOGIN7
     assert "alice".encode("utf-16-le") in srv.logins[0][1] or b"alice" in srv.logins[0][1]
+
+
+def test_binary_parameters_are_sent_as_binary_literals():
+    """pymssql 2.4 quotes bytes as '...' (varchar), which binary columns reject; bytearray is 0x..."""
+    from pymssql import _mssql
+    conn = Connection(None, "pymssql", ConnectionConfig(database="d"), autocommit=True)
+    params = conn._params([b"\x01\xff", memoryview(b"\x02"), bytearray(b"\x03"), "text", 5, None])
+    assert [_mssql.quote_simple_value(p) for p in params[:3]] == [b"0x01ff", b"0x02", b"0x03"]
+    assert params[3:] == ("text", 5, None)

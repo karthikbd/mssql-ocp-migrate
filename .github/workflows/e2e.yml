@@ -79,6 +79,14 @@ jobs:
         env:
           MSSQL_E2E: "1"
         run: python -m pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v --tb=short -s -o faulthandler_timeout=900
+      - name: Keep the migration report on failure
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: e2e-report-${{ matrix.driver }}-${{ strategy.job-index }}
+          path: /tmp/pytest-of-runner/**/report/
+          if-no-files-found: ignore
+          retention-days: 7
       - name: Server logs and blocking sessions on failure
         if: failure() || cancelled()
         run: |
