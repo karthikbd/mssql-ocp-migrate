@@ -83,7 +83,9 @@ and keeps it synchronized. Cut-over is a manual failover.
 
 No runtime dependencies. Releases are published with PyPI Trusted Publishing and carry provenance
 attestations, plus Sigstore-signed assets and a CycloneDX SBOM on GitHub. CI is hash-locked, runs a
-weekly `pip-audit`, CodeQL and OpenSSF Scorecard. See [SECURITY.md](SECURITY.md).
+weekly `pip-audit`, CodeQL, OpenSSF Scorecard, `ruff` and `mypy`, and fuzzes config loading, row
+fingerprints, chunk predicates and identifier quoting with ClusterFuzzLite. See [SECURITY.md](SECURITY.md)
+and [CONTRIBUTING.md](CONTRIBUTING.md).
 Corporate networks: see the JFrog Artifactory / Curation notes in the
 [installation guide](https://mssql-ocp-migrate.readthedocs.io/en/latest/getting_started/install.html).
 
@@ -218,7 +220,8 @@ MSSQL_E2E=1 pytest tests/e2e/test_e2e_sqlserver.py tests/e2e/test_e2e_lift.py -v
 ```
 
 CI runs the same end-to-end suite on every push against SQL Server containers for 2022 → 2022,
-2019 → 2022, 2022 → 2025 and 2025 → 2025 (`.github/workflows/e2e.yml`): a full logical migration
+2019 → 2022, 2022 → 2025 and 2025 → 2025, each with the bundled driver, pyodbc + ODBC Driver 18 and
+pymssql (`.github/workflows/e2e.yml`): a full logical migration
 of every object kind with validation, an online `sync`, and a physical lift through seed, log
 catch-up, cut-over and verify.
 
