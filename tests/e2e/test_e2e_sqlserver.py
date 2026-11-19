@@ -10,6 +10,7 @@ Environment (defaults match docker-compose.yml):
 import os
 import re
 import time
+import traceback
 from pathlib import Path
 
 import pytest
@@ -90,7 +91,11 @@ def migrated(tmp_path_factory):
     cfg.validation.sample_full_pct = 10
     cfg.report_dir = str(tmp / "report")
     t0 = time.monotonic()
-    run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
+    try:
+        run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
+    except Exception:
+        traceback.print_exc()        # now, not in the summary: a later test may hang and lose it
+        raise
     print("run warnings:", *run.warnings, sep="\n  ", flush=True)
     print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
     print("failed chunks:", *[f"{n}: {c} {r.errors[:3]}" for n, r in run.tables.items() for c in r.failed_chunks],

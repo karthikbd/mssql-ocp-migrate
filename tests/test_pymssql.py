@@ -59,7 +59,10 @@ def test_bulk_coercion():
 def _unsafe_tables():
     with_default = Table("dbo", "A", columns=[Column("v", "int", nullable=True, default_definition="((0))")])
     with_xml = Table("dbo", "B", columns=[Column("x", "xml")])
-    return with_default, with_xml
+    with_max = Table("dbo", "D", columns=[Column("n", "nvarchar", max_length=-1)])   # dropped the connection
+    with_datetime = Table("dbo", "E", columns=[Column("d", "datetime")])
+    with_utf8 = Table("dbo", "F", columns=[Column("u", "varchar", max_length=60, collation="Latin1_General_100_CI_AS_SC_UTF8")])
+    return with_default, with_xml, with_max, with_datetime, with_utf8
 
 
 def test_tables_that_bulk_copy_could_corrupt_use_insert(monkeypatch):
@@ -73,7 +76,18 @@ def test_tables_that_bulk_copy_could_corrupt_use_insert(monkeypatch):
     safe = Table("dbo", "C", columns=[Column("v", "int", nullable=False, default_definition="((0))"),
                                      Column("w", "nvarchar", max_length=20)])
     db._load_pymssql(safe, safe.insert_columns, [], False, "insert_bulk", False)
-    assert calls == ["insert", "insert", "bulk"]
+    assert calls == ["insert"] * 5 + ["bulk"]
+
+
+def test_utf8_varchar_is_read_as_nvarchar_with_pymssql():
+    db = SqlServer.__new__(SqlServer)
+    db.driver = "pymssql"
+    cols = [Column("u", "varchar", max_length=60, collation="Latin1_General_100_CI_AS_SC_UTF8"),
+            Column("m", "varchar", max_length=-1, collation="Latin1_General_100_CI_AS_SC_UTF8"),
+            Column("l", "varchar", max_length=60, collation="Latin1_General_CI_AS")]
+    assert db.select_exprs(None, cols) == ["CAST([u] AS nvarchar(60))", "CAST([m] AS nvarchar(max))", "[l]"]
+    db.driver = "pytds"
+    assert db.select_exprs(None, cols) == ["[u]", "[m]", "[l]"]
 
 
 def test_pymssql_login_reaches_server():

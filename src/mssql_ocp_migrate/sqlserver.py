@@ -98,6 +98,10 @@ class SqlServer(CatalogMixin, Database):
                 out.append(f"CAST({qc} AS nvarchar(40))")
             elif t == "datetime":
                 out.append(f"CONVERT(nvarchar(30), {qc}, 126)")
+            elif self.driver == "pymssql" and _utf8_char(c):
+                # FreeTDS decodes varchar with the server code page, which mangles UTF-8 collations;
+                # nvarchar (UTF-16) arrives intact and converts back exactly on insert
+                out.append(f"CAST({qc} AS nvarchar({'max' if c.max_length == -1 else c.max_length}))")
             elif t == "sql_variant":
                 out.append(variant_read_expr(qc))
             elif t in ("json", "vector"):              # SQL Server 2025: travel as their JSON text
@@ -404,8 +408,10 @@ class SqlServer(CatalogMixin, Database):
         FreeTDS bulk copy has no KEEP_NULLS option, so a NULL sent to a column with a DEFAULT would
         be replaced by the default: such tables, and CLR/xml/sql_variant columns, use INSERT."""
         unsafe = (any(c.nullable and c.default_definition for c in cols)
-                  or any(c.is_clr or c.type_name.lower() in ("xml", "sql_variant", "datetimeoffset")
-                         for c in cols)
+                  or any(c.is_clr or c.type_name.lower() in _PYMSSQL_INSERT_TYPES for c in cols)
+                  # FreeTDS bulk copy drops the connection on long (max) values and can't convert
+                  # datetime text or UTF-8 varchar reliably; INSERT lets SQL Server convert
+                  or any(c.max_length == -1 or _utf8_char(c) for c in cols)
                   or any(c.is_column_set for c in table.columns)        # bcp ordinals skip sparse columns
                   or table.fqn in _PYMSSQL_NO_BULK or (identity and strategy == ID_ROW_INSERT))
         if unsafe:
@@ -645,6 +651,13 @@ _PYTDS_NO_BULK: set = set()
 _BULK_METADATA_ERRORS = ("from the bcp client", "odd byte size", "Bulk load data was expected but not sent")
 _LEGACY_LOB = ("text", "ntext", "image",
                "json", "vector")      # SQL Server 2025 types: bulk metadata for them isn't settled; INSERT converts
+
+
+_PYMSSQL_INSERT_TYPES = ("xml", "sql_variant", "datetimeoffset", "datetime", "smalldatetime")
+
+
+def _utf8_char(c: Column) -> bool:
+    return c.type_name.lower() in ("varchar", "char") and "UTF8" in (c.collation or "").upper()
 
 
 def _pymssql_coercers(cols: Sequence[Column]):
