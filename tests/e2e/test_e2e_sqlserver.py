@@ -35,12 +35,20 @@ def conn_cfg(side: str, database: str) -> ConnectionConfig:
                             driver=E("E2E_DRIVER", "auto"), login_timeout=60)
 
 
-def _diagnose(database: str) -> None:
-    """Session state and a few probe queries on a fresh target connection, printed for CI logs."""
+def _diagnose(database: str, side: str = "target") -> None:
+    """Session state and a few probe queries on a fresh connection, printed for CI logs."""
     for autocommit in (True, False):
-        c = connect(conn_cfg("target", database), autocommit=autocommit)
+        c = connect(conn_cfg(side, database), autocommit=autocommit)
         try:
             for sql in ("SELECT @@TRANCOUNT, XACT_STATE(), @@OPTIONS, @@VERSION",
+                        "SELECT t.name, t.transaction_type, t.transaction_begin_time FROM sys.dm_tran_session_transactions s "
+                        "JOIN sys.dm_tran_active_transactions t ON t.transaction_id = s.transaction_id "
+                        "WHERE s.session_id = @@SPID",
+                        "SELECT name, CAST(value AS int), CAST(value_in_use AS int) FROM sys.configurations "
+                        "WHERE name IN ('user options', 'remote proc trans', 'cursor threshold')",
+                        "SELECT is_read_committed_snapshot_on, snapshot_isolation_state, is_memory_optimized_elevate_to_snapshot_on, "
+                        "is_cursor_close_on_commit_on, is_local_cursor_default, delayed_durability_desc, is_cdc_enabled "
+                        "FROM sys.databases WHERE name = DB_NAME()",
                         "SELECT COUNT_BIG(*) FROM dbo.[Session] WITH (SNAPSHOT)",
                         "SELECT COUNT_BIG(*) FROM dbo.[Session]",
                         "SELECT COUNT_BIG(*) FROM sales.Customer"):
@@ -108,12 +116,14 @@ def migrated(tmp_path_factory):
     cfg.validation.sample_full_pct = 10
     cfg.report_dir = str(tmp / "report")
     t0 = time.monotonic()
+    _diagnose("e2e_src", "source")
     try:
         run = Migrator(cfg, progress=lambda m: print(f"[{time.monotonic() - t0:7.1f}s] {m}", flush=True)).migrate()
     except Exception:
         traceback.print_exc()        # now, not in the summary: a later test may hang and lose it
         _diagnose("e2e_tgt")
         raise
+    _diagnose("e2e_tgt")
     print("run warnings:", *run.warnings, sep="\n  ", flush=True)
     print("ddl errors:", *run.ddl_errors, sep="\n  ", flush=True)
     print("failed chunks:", *[f"{n}: {c} {r.errors[:3]}" for n, r in run.tables.items() for c in r.failed_chunks],
