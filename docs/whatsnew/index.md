@@ -1,5 +1,21 @@
 # Release notes
 
+## 0.5.1 (November 2026)
+
+A security fix found while writing the threat model, and the groundwork for the OpenSSF silver and
+baseline badges.
+
+- **Schema scripts no longer contain certificate private keys.** `mssql-migrate schema -o FILE` wrote
+  each certificate's private key together with the one-time password protecting it, so anyone who could
+  read the file could recover the key. The script now leaves private keys out and says how to move them
+  (`migrate` still copies them over the connection). If you wrote a schema script with
+  `copy_certificates` on, delete it and consider those private keys exposed to whoever could read it.
+- Governance, code of conduct, roadmap, a security assurance case, dependency and scanning policy,
+  support and end-of-life policy, and an OpenVEX document.
+- Reproducible builds (checked in CI), `mypy --strict`, `ruff` security rules (errors that were silently
+  ignored are now logged at debug level), an 80% coverage floor, DCO and dependency review on pull
+  requests; `main` accepts changes only through pull requests.
+
 ## 0.5.0 (November 2026)
 
 The same quality and supply-chain checks as lodestream, and two fixes found by fuzzing:

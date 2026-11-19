@@ -2,7 +2,7 @@
 
 All notable changes to `mssql-ocp-migrate` are documented here.
 
-## [Unreleased]
+## [0.5.1] - 2026-11-19
 
 ### Security
 - `mssql-migrate schema -o FILE` wrote each certificate's private key together with the one-time password

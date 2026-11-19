@@ -7,7 +7,7 @@ under ``mssql_ocp_migrate._vendor``. pyodbc is used only if it is already instal
     run = Migrator(Config.load("migrate.toml")).migrate()
     print(run.ok, run.rows)
 """
-__version__ = "0.5.0"
+__version__ = "0.5.1"
 
 from .config import Config, ConnectionConfig, MigrationConfig, ValidationConfig
 from .engine import Migrator, RunResult
